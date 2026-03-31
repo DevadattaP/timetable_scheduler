@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Timetable Scheduler</title>
+<link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}"/>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=Source+Sans+3:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <div class="logo-icon">⏳</div>
+    <div>
+      <div class="logo-text">Timetable Scheduler</div>
+      <div class="logo-sub">Linear Programming Problem</div>
+    </div>
+  </div>
+  <div style="display:flex;align-items:center;gap:.5rem">
+    <button id="import-btn" title="Import configuration from Excel">⬆ Import</button>
+    <button id="export-btn" title="Export configuration to Excel">⬇ Export</button>
+    <button id="reset-btn" title="Reset all configuration">⚠ Reset</button>
+    <input type="file" id="import-file-input" accept=".xlsx" style="display:none"/>
+  </div>
+</header>
+
+<nav class="main-nav">
+  <button class="tab-btn active" data-tab="about">About</button>
+  <button class="tab-btn" data-tab="configure">Configure</button>
+  <button class="tab-btn" data-tab="timetable">Timetable</button>
+</nav>
+
+<!-- ═══════════════ ABOUT TAB ═══════════════ -->
+<div id="tab-about" class="tab-content active">
+  <div class="section-header">
+    <div>
+      <h2>About This System</h2>
+      <p>Automated academic scheduling using Integer Linear Programming</p>
+    </div>
+  </div>
+  <div class="about-grid">
+    <div>
+      <div class="card">
+        <div class="card-title">🎓 Objective</div>
+        <p style="font-size:.88rem;color:var(--text2);line-height:1.7">
+          This system automates the creation of a feasible and optimized class timetable
+          for any academic programme. It accommodates multiple sections, faculty
+          constraints, and calendar availability — while minimizing pedagogical disruptions.
+        </p>
+      </div>
+      <div class="card">
+        <div class="card-title">⚙ How It Works</div>
+        <ul class="rule-list">
+          <li>Configure sections, courses, faculty, and their mappings in the Configure tab.</li>
+          <li>You can even import configuration from an Excel file. <a href="{{ url_for('static', filename='Timetable_Config_LP.xlsx') }}" download>Download Template</a></li>
+          <li>Click <strong>Generate Timetable</strong> to send data to the LP solver.</li>
+          <li>The solver first attempts a <strong>Hard</strong> model (no consecutive-week violations).</li>
+          <li>If infeasible, it automatically retries with a <strong>Soft</strong> penalty model.</li>
+          <li>The generated timetable is displayed and can be verified for all constraint satisfaction.</li>
+          <li>You can export the configuration and timetable to Excel for backup or offline editing.</li>
+        </ul>
+      </div>
+    </div>
+    <div>
+      <div class="card">
+        <div class="card-title">🔒 Hard Constraints</div>
+        <ul class="rule-list">
+          <li><strong>Zero Slack:</strong> Every available slot must be filled by exactly one class.</li>
+          <li><strong>No Faculty Cloning:</strong> A faculty member cannot teach two sections simultaneously.</li>
+          <li><strong>Max Daily Load:</strong> Faculty can teach at most N sessions per calendar day.</li>
+          <li><strong>Course Spacing:</strong> A section cannot have the same course twice in one day.</li>
+          <li><strong>Unavailability:</strong> Faculty are not scheduled on blocked dates.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <div class="card-title">✨ Soft Constraint (Optimized)</div>
+        <ul class="rule-list">
+          <li><strong>Alternate Weekend Rule:</strong> A section should not be taught the same course in two consecutive weeks.</li>
+          <li>If a perfect schedule is impossible (due to zero slack), violations are <em>minimized</em> via a penalty in the objective function.</li>
+          <li>Penalty = number of (section, course, week) pairs where the same course appears in both week W and W+1.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════ CONFIGURE TAB ═══════════════ -->
+<div id="tab-configure" class="tab-content">
+  <nav class="sub-nav">
+    <button class="subtab-btn active" data-subtab="sections">Sections</button>
+    <button class="subtab-btn" data-subtab="courses">Courses</button>
+    <button class="subtab-btn" data-subtab="faculty">Faculty</button>
+    <button class="subtab-btn" data-subtab="mapping">Mapping</button>
+  </nav>
+
+  <!-- SECTIONS -->
+  <div id="subtab-sections" class="subtab-content active">
+    <div class="section-header">
+      <div><h2>Sections</h2><p>Define teaching periods and available time slots per section</p></div>
+      <button class="btn btn-primary" id="add-section-btn">+ Add Section</button>
+    </div>
+    <div class="card" style="margin-bottom:1.25rem">
+      <div class="card-title">📅 Teaching Period</div>
+      <div class="date-range-card">
+        <div class="form-group">
+          <label>Start Date</label>
+          <input type="date" id="start-date"/>
+        </div>
+        <div class="form-group">
+          <label>End Date</label>
+          <input type="date" id="end-date"/>
+        </div>
+        <button class="btn btn-ghost" onclick="saveDates()">Save Dates</button>
+      </div>
+    </div>
+    <div id="sections-list"></div>
+  </div>
+
+  <!-- COURSES -->
+  <div id="subtab-courses" class="subtab-content">
+    <div class="section-header">
+      <div><h2>Courses</h2><p>Define courses and their session requirements</p></div>
+      <button class="btn btn-primary" id="add-course-btn">+ Add Course</button>
+    </div>
+    <div id="courses-list"></div>
+  </div>
+
+  <!-- FACULTY -->
+  <div id="subtab-faculty" class="subtab-content">
+    <div class="section-header">
+      <div><h2>Faculty</h2><p>Add faculty members and mark unavailable dates</p></div>
+      <button class="btn btn-primary" id="add-faculty-btn">+ Add Faculty</button>
+    </div>
+    <div id="faculty-list"></div>
+  </div>
+
+  <!-- MAPPING -->
+  <div id="subtab-mapping" class="subtab-content">
+    <div class="section-header">
+      <div><h2>Section-Course-Faculty Mapping</h2><p>Assign faculty to teach specific courses for specific sections</p></div>
+      <button class="btn btn-primary" id="add-mapping-btn">+ Add Mapping</button>
+    </div>
+    <div id="mapping-list"></div>
+  </div>
+</div>
+
+<!-- ═══════════════ TIMETABLE TAB ═══════════════ -->
+<div id="tab-timetable" class="tab-content">
+  <div class="section-header">
+    <div><h2>Timetable</h2><p>Generate and verify the optimized schedule</p></div>
+  </div>
+
+  <div id="tt-meta-card" class="meta-card" style="display:none">
+    <div class="meta-info">
+      <div class="meta-item"><label>Generated</label><span id="tt-meta-time">—</span></div>
+      <div class="meta-item"><label>Constraint Type</label><span id="tt-meta-type">—</span></div>
+      <div class="meta-item"><label>Penalty Score</label><span id="tt-meta-penalty">—</span></div>
+      <div class="meta-item"><label>Total Sessions</label><span id="tt-meta-total">—</span></div>
+    </div>
+    <div id="tt-stale-warn" class="stale-warn" style="display:none">⚠ Config changed — regenerate for latest schedule</div>
+  </div>
+  <div id="tt-no-timetable" class="card" style="text-align:center;padding:2rem;display:block">
+    <div style="font-size:2.5rem;margin-bottom:.5rem">📋</div>
+    <div style="color:var(--muted);font-size:.9rem">No timetable generated yet. Either configure sections, courses, faculty, and mappings first, or import an existing configuration.</div>
+  </div>
+
+  <div class="timetable-actions">
+    <button class="btn btn-primary btn-lg" id="generate-btn" onclick="generateTimetable()">⚡ Generate Timetable</button>
+    <button class="btn btn-blue btn-lg" id="verify-btn" onclick="verifyTimetable()" style="display:none">✓ Verify Timetable</button>
+  </div>
+
+  <div id="tt-table-wrap" style="display:none">
+    <div class="table-wrap">
+      <table class="data-table" id="tt-table">
+        <thead>
+          <tr>
+            <th>
+              <div class="filter" id="filter-date">
+                <div class="filter-btn" onclick="toggleFilter('date')">Date ⌄</div>
+                <div class="filter-dropdown">
+                  <input type="text" placeholder="Search..." oninput="filterSearch('date', this.value)">
+                  <label><input type="checkbox" onchange="toggleAll('date', this)"> All</label>
+                  <div class="filter-options" id="opts-date"></div>
+                </div>
+              </div>
+            </th>
+            <th>
+              <div class="filter" id="filter-day">
+                <div class="filter-btn" onclick="toggleFilter('day')">Day ⌄</div>
+                <div class="filter-dropdown">
+                  <input type="text" placeholder="Search..." oninput="filterSearch('day', this.value)">
+                  <label><input type="checkbox" onchange="toggleAll('day', this)"> All</label>
+                  <div class="filter-options" id="opts-day"></div>
+                </div>
+              </div>
+            </th>
+            <th>
+              <div class="filter" id="filter-time">
+                <div class="filter-btn" onclick="toggleFilter('time')">Time ⌄</div>
+                <div class="filter-dropdown">
+                  <input type="text" placeholder="Search..." oninput="filterSearch('time', this.value)">
+                  <label><input type="checkbox" onchange="toggleAll('time', this)"> All</label>
+                  <div class="filter-options" id="opts-time"></div>
+                </div>
+              </div>
+            </th>
+            <th>
+              <div class="filter" id="filter-section">
+                <div class="filter-btn" onclick="toggleFilter('section')">Section ⌄</div>
+                <div class="filter-dropdown">
+                  <input type="text" placeholder="Search..." oninput="filterSearch('section', this.value)">
+                  <label><input type="checkbox" onchange="toggleAll('section', this)"> All</label>
+                  <div class="filter-options" id="opts-section"></div>
+                </div>
+              </div>
+            </th>
+            <th>
+              <div class="filter" id="filter-course">
+                <div class="filter-btn" onclick="toggleFilter('course')">Course ⌄</div>
+                <div class="filter-dropdown">
+                  <input type="text" placeholder="Search..." oninput="filterSearch('course', this.value)">
+                  <label><input type="checkbox" onchange="toggleAll('course', this)"> All</label>
+                  <div class="filter-options" id="opts-course"></div>
+                </div>
+              </div>
+            </th>
+            <th>
+              <div class="filter" id="filter-faculty">
+                <div class="filter-btn" onclick="toggleFilter('faculty')">Faculty ⌄</div>
+                <div class="filter-dropdown">
+                  <input type="text" placeholder="Search..." oninput="filterSearch('faculty', this.value)">
+                  <label><input type="checkbox" onchange="toggleAll('faculty', this)"> All</label>
+                  <div class="filter-options" id="opts-faculty"></div>
+                </div>
+              </div>
+            </th>
+          </tr>
+        </thead>
+        <tbody id="tt-tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div id="verify-results" style="display:none;margin-top:2rem">
+    <div class="section-header" style="margin-bottom:1rem">
+      <div><h2>Verification Results</h2><p>Constraint satisfaction analysis</p></div>
+    </div>
+    <div class="verify-grid" id="verify-stats"></div>
+    <div id="verify-details"></div>
+  </div>
+</div>
+
+<!-- ═══════════════ MODAL ═══════════════ -->
+<div class="modal-overlay" id="modal-overlay">
+  <div class="modal-box" id="modal-box">
+    <div class="modal-header">
+      <h3 id="modal-title">Modal</h3>
+      <button class="modal-close" id="modal-close">×</button>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+    <div class="modal-footer" id="modal-footer">
+      <button class="btn btn-ghost" id="modal-cancel">Cancel</button>
+      <button class="btn btn-primary" id="modal-save">Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- CONFIRM MODAL -->
+<div class="modal-overlay" id="confirm-overlay">
+  <div class="modal-box" id="confirm-box">
+    <div class="modal-header">
+      <h3 id="confirm-title">Confirm</h3>
+      <button class="modal-close" onclick="closeConfirm()">×</button>
+    </div>
+    <div class="modal-body">
+      <div id="confirm-msg"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeConfirm()">Cancel</button>
+      <button class="btn btn-danger" id="confirm-ok">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast-container"></div>
+
+<script src="{{ url_for('static', filename='script.js') }}"></script>
+
+</body>
+</html>
