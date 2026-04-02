@@ -31,7 +31,7 @@ Your model must adhere to the following rules.
 1. Clone the repository:
 
    ```bash
-   git clone "https://github.com/DevadattaP/timetable-generator.git"
+   git clone "https://github.com/DevadattaP/timetable_scheduler.git"
    cd timetable-generator
    ```
 
