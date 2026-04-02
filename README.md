@@ -32,7 +32,7 @@ Your model must adhere to the following rules.
 
    ```bash
    git clone "https://github.com/DevadattaP/timetable_scheduler.git"
-   cd timetable-generator
+   cd timetable_scheduler
    ```
 
 2. Install dependencies:
