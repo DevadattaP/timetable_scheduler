@@ -177,70 +177,7 @@
   <div id="tt-table-wrap" style="display:none">
     <div class="table-wrap">
       <table class="data-table" id="tt-table">
-        <thead>
-          <tr>
-            <th>
-              <div class="filter" id="filter-date">
-                <div class="filter-btn" onclick="toggleFilter('date')">Date ⌄</div>
-                <div class="filter-dropdown">
-                  <input type="text" placeholder="Search..." oninput="filterSearch('date', this.value)">
-                  <label><input type="checkbox" onchange="toggleAll('date', this)"> All</label>
-                  <div class="filter-options" id="opts-date"></div>
-                </div>
-              </div>
-            </th>
-            <th>
-              <div class="filter" id="filter-day">
-                <div class="filter-btn" onclick="toggleFilter('day')">Day ⌄</div>
-                <div class="filter-dropdown">
-                  <input type="text" placeholder="Search..." oninput="filterSearch('day', this.value)">
-                  <label><input type="checkbox" onchange="toggleAll('day', this)"> All</label>
-                  <div class="filter-options" id="opts-day"></div>
-                </div>
-              </div>
-            </th>
-            <th>
-              <div class="filter" id="filter-time">
-                <div class="filter-btn" onclick="toggleFilter('time')">Time ⌄</div>
-                <div class="filter-dropdown">
-                  <input type="text" placeholder="Search..." oninput="filterSearch('time', this.value)">
-                  <label><input type="checkbox" onchange="toggleAll('time', this)"> All</label>
-                  <div class="filter-options" id="opts-time"></div>
-                </div>
-              </div>
-            </th>
-            <th>
-              <div class="filter" id="filter-section">
-                <div class="filter-btn" onclick="toggleFilter('section')">Section ⌄</div>
-                <div class="filter-dropdown">
-                  <input type="text" placeholder="Search..." oninput="filterSearch('section', this.value)">
-                  <label><input type="checkbox" onchange="toggleAll('section', this)"> All</label>
-                  <div class="filter-options" id="opts-section"></div>
-                </div>
-              </div>
-            </th>
-            <th>
-              <div class="filter" id="filter-course">
-                <div class="filter-btn" onclick="toggleFilter('course')">Course ⌄</div>
-                <div class="filter-dropdown">
-                  <input type="text" placeholder="Search..." oninput="filterSearch('course', this.value)">
-                  <label><input type="checkbox" onchange="toggleAll('course', this)"> All</label>
-                  <div class="filter-options" id="opts-course"></div>
-                </div>
-              </div>
-            </th>
-            <th>
-              <div class="filter" id="filter-faculty">
-                <div class="filter-btn" onclick="toggleFilter('faculty')">Faculty ⌄</div>
-                <div class="filter-dropdown">
-                  <input type="text" placeholder="Search..." oninput="filterSearch('faculty', this.value)">
-                  <label><input type="checkbox" onchange="toggleAll('faculty', this)"> All</label>
-                  <div class="filter-options" id="opts-faculty"></div>
-                </div>
-              </div>
-            </th>
-          </tr>
-        </thead>
+        <thead id="tt-thead"></thead>
         <tbody id="tt-tbody"></tbody>
       </table>
     </div>

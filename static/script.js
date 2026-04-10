@@ -594,25 +594,31 @@ const ActiveFilters = {
   day: new Set(),
   time: new Set(),
   section: new Set(),
-  course: new Set(),
-  faculty: new Set()
 };
-function toggleFilter(key){
-  const filter = document.getElementById(`filter-${key}`);
-  const dropdown = filter.querySelector('.filter-dropdown');
-  const rect = filter.getBoundingClientRect();
 
-  document.querySelectorAll('.filter').forEach(f=>f.classList.remove('open'));
+function toggleFilter(key){
+  const isAlreadyOpen = document.getElementById(`filter-${key}`).classList.contains('open');
+
+  // Close all, reset all th z-indices
+  document.querySelectorAll('.filter').forEach(f => f.classList.remove('open'));
+  document.querySelectorAll('#tt-thead th').forEach(th => th.style.zIndex = '');
+
+  if (isAlreadyOpen) return;
+
+  const filter = document.getElementById(`filter-${key}`);
+  const th = filter.closest('th');
+  if (th) th.style.zIndex = '200';   // lift above sibling sticky ths
 
   filter.classList.add('open');
 
-  dropdown.style.top = (rect.bottom + 10) + 'px';
+  const dropdown = filter.querySelector('.filter-dropdown');
+  const rect = filter.getBoundingClientRect();
+  dropdown.style.top  = (rect.bottom + 6) + 'px';
   dropdown.style.left = rect.left + 'px';
   const rightOverflow = rect.left + 200 - window.innerWidth;
-  if (rightOverflow > 0) {
-    dropdown.style.left = (rect.left - rightOverflow - 10) + 'px';
-  }
+  if (rightOverflow > 0) dropdown.style.left = (rect.left - rightOverflow - 10) + 'px';
 }
+
 function toggleFilterValue(key, el){
   if(el.checked) ActiveFilters[key].add(el.value);
   else ActiveFilters[key].delete(el.value);
@@ -642,56 +648,114 @@ function toggleAll(key, el){
 
   renderTimetableRows();
 }
+
 function filterSearch(key, val){
   val = val.toLowerCase();
   document.querySelectorAll(`#opts-${key} label`).forEach(l=>{
     l.style.display = l.textContent.toLowerCase().includes(val) ? '' : 'none';
   });
 }
+
 document.addEventListener('click', e=>{
   if(!e.target.closest('.filter')){
     document.querySelectorAll('.filter').forEach(f=>f.classList.remove('open'));
+    document.querySelectorAll('#tt-thead th').forEach(th => th.style.zIndex = '');
   }
 });
+
 function resetAllFilters() {
   Object.keys(ActiveFilters).forEach(k => {
     ActiveFilters[k].clear();
   });
 }
 
-function populateFilters(tt){
-  const fields = {
-    date:    [...new Set(tt.map(r => r.date))].sort(),
-    day:     [...new Set(tt.map(r => r.day))],
-    time:    [...new Set(tt.map(r => r.timeLabel))].sort(),
-    section: [...new Set(tt.map(r => r.section))].sort(),
-    course:  [...new Set(tt.map(r => r.courseCode))].sort(),
-    faculty: [...new Set(tt.map(r => r.faculty))].sort(),
-  };
+function filterThHTML(key, label, stickyClass = '') {
+  return `<th rowspan="2" class="${stickyClass}">
+    <div class="filter" id="filter-${key}">
+      <div class="filter-btn" onclick="toggleFilter('${key}')">${label} ⌄</div>
+      <div class="filter-dropdown">
+        <input type="text" placeholder="Search..." oninput="filterSearch('${key}', this.value)">
+        <label><input type="checkbox" onchange="toggleAll('${key}', this)"> All</label>
+        <div class="filter-options" id="opts-${key}"></div>
+      </div>
+    </div>
+  </th>`;
+}
 
-  Object.entries(fields).forEach(([key, vals])=>{
+function populateFilters(tt) {
+  const allSections = [...new Set(tt.map(r => r.section))].sort();
+
+  // Init filters on first call
+  const rowFields = {
+    date: [...new Set(tt.map(r => r.date))].sort(),
+    day:  [...new Set(tt.map(r => r.day))],
+    time: [...new Set(tt.map(r => r.timeLabel))].sort(),
+  };
+  Object.entries(rowFields).forEach(([key, vals]) => {
+    if (ActiveFilters[key].size === 0) vals.forEach(v => ActiveFilters[key].add(v));
+  });
+  if (ActiveFilters.section.size === 0) allSections.forEach(s => ActiveFilters.section.add(s));
+
+  // Build 2-row thead
+  const visibleSections = allSections.filter(s => ActiveFilters.section.has(s));
+  const sectionOptsHTML = allSections.map(s => `
+    <label>
+      <input type="checkbox" value="${s}" ${ActiveFilters.section.has(s) ? 'checked' : ''}
+        onchange="toggleFilterValue('section', this)">
+      ${s}
+    </label>`).join('');
+
+  document.getElementById('tt-thead').innerHTML = `
+    <tr>
+      ${filterThHTML('date', 'Date', 'tt-sticky-0')}
+      ${filterThHTML('day',  'Day',  'tt-sticky-1')}
+      ${filterThHTML('time', 'Time', 'tt-sticky-2')}
+      <th colspan="${visibleSections.length}" style="text-align:center;padding:.5rem">
+        <div class="filter" id="filter-section">
+          <div class="filter-btn" onclick="toggleFilter('section')">Sections ⌄</div>
+          <div class="filter-dropdown">
+            <input type="text" placeholder="Search..." oninput="filterSearch('section', this.value)">
+            <label><input type="checkbox" ${ActiveFilters.section.size === allSections.length ? 'checked' : ''} onchange="toggleAll('section', this)"> All</label>
+            <div class="filter-options" id="opts-section">${sectionOptsHTML}</div>
+          </div>
+        </div>
+      </th>
+    </tr>
+    <tr>
+      ${visibleSections.map(s =>
+        `<th style="text-align:center;font-weight:600;font-size:.82rem;padding:.45rem .6rem">${s}</th>`
+      ).join('')}
+    </tr>`;
+
+  freezeTheadRow2();
+
+  // Populate date/day/time dropdown options
+  Object.entries(rowFields).forEach(([key, vals]) => {
     const box = document.getElementById(`opts-${key}`);
     const allCheckbox = document.querySelector(`#filter-${key} input[type="checkbox"]`);
-    
-    if(!box) return;
-
-    // FIRST TIME: select all
-    if (ActiveFilters[key].size === 0) {
-      vals.forEach(v => ActiveFilters[key].add(v));
-    }
-
-    box.innerHTML = vals.map(v=>`
+    if (!box) return;
+    box.innerHTML = vals.map(v => `
       <label>
-        <input type="checkbox" value="${v}"
-          ${ActiveFilters[key].has(v)?'checked':''}
+        <input type="checkbox" value="${v}" ${ActiveFilters[key].has(v) ? 'checked' : ''}
           onchange="toggleFilterValue('${key}', this)">
         ${v}
-      </label>
-    `).join('');
+      </label>`).join('');
+    if (allCheckbox) allCheckbox.checked = ActiveFilters[key].size === vals.length;
+  });
+}
 
-    // Sync "All"
-    if (allCheckbox) {
-      allCheckbox.checked = ActiveFilters[key].size === vals.length;
+function freezeTheadRow2() {
+  requestAnimationFrame(() => {
+    const row1 = document.querySelector('#tt-thead tr:first-child');
+    const row2Ths = document.querySelectorAll('#tt-thead tr:last-child th');
+    if (row1 && row2Ths.length) {
+      const h = row1.getBoundingClientRect().height;
+      row2Ths.forEach(th => {
+        th.style.position = 'sticky';
+        th.style.top = h + 'px';
+        th.style.background = 'var(--bg)';
+        th.style.zIndex = '5';
+      });
     }
   });
 }
@@ -700,31 +764,89 @@ function renderTimetableRows() {
   const tt = State.timetable;
   if (!tt || !tt.length) return;
 
-  const rows = tt.filter(r =>
-    (!ActiveFilters.date.size    || ActiveFilters.date.has(r.date)) &&
-    (!ActiveFilters.day.size     || ActiveFilters.day.has(r.day)) &&
-    (!ActiveFilters.time.size    || ActiveFilters.time.has(r.timeLabel)) &&
-    (!ActiveFilters.section.size || ActiveFilters.section.has(r.section)) &&
-    (!ActiveFilters.course.size  || ActiveFilters.course.has(r.courseCode)) &&
-    (!ActiveFilters.faculty.size || ActiveFilters.faculty.has(r.faculty))
+  // ── 1. Filter by date/day/time filters ──
+  const filtered = tt.filter(r =>
+    (!ActiveFilters.date.size || ActiveFilters.date.has(r.date)) &&
+    (!ActiveFilters.day.size  || ActiveFilters.day.has(r.day)) &&
+    (!ActiveFilters.time.size || ActiveFilters.time.has(r.timeLabel))
   );
 
+  // ── 2. Visible sections (respects section filter) ──
+  const allSections = [...new Set(tt.map(r => r.section))].sort();
+  const sections = allSections.filter(s => !ActiveFilters.section.size || ActiveFilters.section.has(s));
+
+  // Sync second thead row and Sections colspan
+  const thead = document.getElementById('tt-thead');
+  const theadRows = thead.querySelectorAll('tr');
+  if (theadRows.length >= 2) {
+    theadRows[1].innerHTML = sections.map(s =>
+      `<th style="text-align:center;font-weight:600;font-size:.82rem;padding:.45rem .6rem">${s}</th>`
+    ).join('');
+  }
+  freezeTheadRow2();
+  const secTh = thead.querySelector('tr:first-child th[colspan]');
+  if (secTh) secTh.colSpan = Math.max(1, sections.length);
+
   const tbody = document.getElementById('tt-tbody');
-  if (!rows.length) {
-    tbody.innerHTML = `<tr><td colspan="6" class="empty-state">No sessions match the current filters.</td></tr>`;
+  const numCols = 3 + sections.length;
+
+  if (!filtered.length || !sections.length) {
+    tbody.innerHTML = `<tr><td colspan="${numCols}" class="empty-state">No sessions match the current filters.</td></tr>`;
     return;
   }
-  tbody.innerHTML = rows.map(r => {
-    const col  = getCourseColor(r.courseCode);
-    const chip = `<span class="course-chip" style="background:${col}22;color:${col};border:1px solid ${col}44">${r.courseShort||r.courseCode}</span>`;
-    return `<tr>
-      <td style="font-family:var(--font-m);font-size:.8rem">${r.date}</td>
-      <td style="color:var(--text2);font-size:.82rem">${r.day}</td>
-      <td style="font-family:var(--font-m);font-size:.78rem;color:var(--text2)">${r.timeLabel}</td>
-      <td><span class="badge badge-gold section-badge">${r.section}</span></td>
-      <td>${chip} <span style="color:var(--text2);font-size:.8rem">${r.courseTitle}</span></td>
-      <td style="font-size:.82rem">${r.faculty}</td>
-    </tr>`;
+
+  // ── 3. Sort by date then time ──
+  filtered.sort((a, b) => a.date.localeCompare(b.date) || a.timeLabel.localeCompare(b.timeLabel));
+
+  // ── 4. Group: outer = date+day, inner = timeLabel ──
+  const dateGroups = new Map();
+  filtered.forEach(r => {
+    const dk = `${r.date}||${r.day}`;
+    if (!dateGroups.has(dk)) dateGroups.set(dk, { date: r.date, day: r.day, times: new Map() });
+    const tm = dateGroups.get(dk).times;
+    if (!tm.has(r.timeLabel)) tm.set(r.timeLabel, {});
+    tm.get(r.timeLabel)[r.section] = r;
+  });
+
+  // ── 5. Remove time slots where ALL visible sections are empty ──
+  for (const [dk, group] of dateGroups) {
+    for (const [tl, sessMap] of group.times) {
+      if (!sections.some(s => sessMap[s])) group.times.delete(tl);
+    }
+    if (group.times.size === 0) dateGroups.delete(dk);
+  }
+
+  if (!dateGroups.size) {
+    tbody.innerHTML = `<tr><td colspan="${numCols}" class="empty-state">No sessions match the current filters.</td></tr>`;
+    return;
+  }
+
+  // ── 6. Render with rowspan on Date & Day ──
+  tbody.innerHTML = [...dateGroups.values()].map(({ date, day, times }) => {
+    const timeEntries = [...times.entries()];
+    const rowspan = timeEntries.length;
+
+    return timeEntries.map(([timeLabel, sessMap], tIdx) => {
+      const dateDayCells = tIdx === 0 ? `
+        <td rowspan="${rowspan}" class="tt-sticky-0" style="vertical-align:middle;border-right:1px solid var(--border);font-family:var(--font-m);font-size:.8rem">${date}</td>
+        <td rowspan="${rowspan}" class="tt-sticky-1" style="vertical-align:middle;border-right:1px solid var(--border);color:var(--text2);font-size:.82rem">${day}</td>` : '';
+
+      const sectionCells = sections.map(sec => {
+        const r = sessMap[sec];
+        if (!r) return `<td style="color:var(--muted);text-align:center;font-size:.8rem">—</td>`;
+        const col = getCourseColor(r.courseCode);
+        return `<td style="text-align:center">
+          <span class="course-chip" style="background:${col}22;color:${col};border:1px solid ${col}44">${r.courseShort||r.courseCode}</span>
+          <span style="color:var(--text2);font-size:.75rem;display:block;margin-top:.2rem">${r.facultyShort||r.faculty}</span>
+        </td>`;
+      });
+
+      return `<tr>
+        ${dateDayCells}
+        <td class="tt-sticky-2" style="font-family:var(--font-m);font-size:.78rem;color:var(--text2)">${timeLabel}</td>
+        ${sectionCells.join('')}
+      </tr>`;
+    }).join('');
   }).join('');
 }
 

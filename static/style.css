@@ -318,7 +318,31 @@ header{
 }
 .section-filter-btn.active{border-color:var(--gold);color:var(--gold-light);background:var(--gold-dim)}
 #tt-table thead th{
-  vertical-align:top;
+  vertical-align:center;text-align:center;
+}
+/* ── FROZEN COLUMNS (Date, Day, Time) ── */
+.tt-sticky-0, .tt-sticky-1, .tt-sticky-2 {
+  position: sticky;
+  z-index: 3;
+  background: var(--bg);
+}
+.tt-sticky-0 { left: 0;     min-width: 75px; }
+.tt-sticky-1 { left: 75px;  min-width: 75px; }
+.tt-sticky-2 { left: 150px; min-width: 100px; box-shadow: 2px 0 5px rgba(0,0,0,.07); }
+#tt-table thead .tt-sticky-0,
+#tt-table thead .tt-sticky-1,
+#tt-table thead .tt-sticky-2 { z-index: 15; }
+/* Sticky body cells always stay above scrolled cells */
+td.tt-sticky-0, td.tt-sticky-1, td.tt-sticky-2 {
+  position: sticky;
+  z-index: 2;
+  background: var(--bg);
+}
+/* On hover, keep their background opaque so scrolled cells can't bleed through */
+tr:hover td.tt-sticky-0,
+tr:hover td.tt-sticky-1,
+tr:hover td.tt-sticky-2 {
+  background: var(--surface);
 }
 /* FILTER DROPDOWN */
 .filter{position:relative}
