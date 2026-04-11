@@ -1,6 +1,52 @@
 """
 scheduler.py — Class Timetable LP Solver (JSON in / JSON out)
 Requires: pulp, pandas
+=================================================================================
+MATHEMATICAL FORMULATION SUMMARY
+----------------------------------
+ 
+SETS:
+  S  = {A, B, C, D, E, F}           — Sections
+  C  = {OR, BL, EE, IS, FM1, OB2}   — Courses
+  T_s = {0, ..., 39}                 — Slot indices for section s (40 slots each)
+  F  = set of faculty members
+  W  = set of ISO week numbers in the quarter
+ 
+PARAMETERS:
+  req[s,c]        = number of sessions section s must have for course c
+  fac[s,c]        = faculty assigned to teach course c to section s
+  date[s,t]       = calendar date of slot t for section s
+  week[s,t]       = ISO week number of slot t for section s
+  unavail[f]      = set of dates faculty f is unavailable
+  overlap[t1,t2]  = 1 if slots t1 (for some A-E section) and t2 share the same
+                    calendar date AND same time window (always true for same
+                    slot index across A-E sections; never true between A-E and F)
+ 
+DECISION VARIABLES:
+  x[s,c,t] ∈ {0,1}  — 1 if section s is taught course c at slot t
+  y[s,c,w] ∈ {0,1}  — 1 if section s has at least one session of course c in week w
+                        (auxiliary variable, derived from x)
+  p[s,c,w] ∈ {0,1}  — 1 if course c is taught to section s in BOTH week w and w+1
+                        (penalty variable for soft constraint)
+ 
+OBJECTIVE:
+  VERSION 1 (Hard): Minimize 0  [feasibility problem — likely INFEASIBLE]
+  VERSION 2 (Soft): Minimize Σ_{s,c,w} p[s,c,w]  [minimize consecutive-week count]
+ 
+HARD CONSTRAINTS:
+  (H1) Session Fulfillment:  Σ_t x[s,c,t] = req[s,c]              ∀ s,c
+  (H2) One Course per Slot:  Σ_c x[s,c,t] = 1                     ∀ s,t
+  (H3) No Faculty Cloning:   Σ_{(s,c): fac[s,c]=f} x[s,c,t] ≤ 1  ∀ f, t (A-E slots only)
+  (H4) Max m Sessions/Day:   Σ_{(s,c,t): date[s,t]=d, fac[s,c]=f} x[s,c,t] ≤ m  ∀ f,d
+  (H5) Course Spacing:       Σ_{t: date[s,t]=d} x[s,c,t] ≤ 1     ∀ s,c,d
+  (H6) Unavailability:       x[s,c,t] = 0  if fac[s,c] unavailable on date[s,t]
+  (H7) Alternate Weekend:    y[s,c,w] + y[s,c,w+1] ≤ 1          ∀ s,c,w
+ 
+SOFT CONSTRAINT LINEARIZATION (alternate weekend rule):
+  (S1) y[s,c,w] ≥ x[s,c,t]           ∀ s,c,t where week[s,t]=w  (y=1 if any session)
+  (S2) y[s,c,w] ≤ Σ_{t∈w} x[s,c,t]  (y=0 if no sessions in week)
+  (S3) p[s,c,w] ≥ y[s,c,w] + y[s,c,w+1] - 1  ∀ s,c,w   (penalty fires if both weeks active)
+
 """
 
 import pulp
@@ -9,8 +55,7 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 
 
-# ── helpers ──────────────────────────────────────────────────────────────────
-
+#  helpers 
 def _parse_date(s):
     return datetime.strptime(s, "%Y-%m-%d").date()
 
@@ -52,8 +97,7 @@ def _generate_calendar(sections, start_date, end_date):
     return calendar
 
 
-# ── main solver ───────────────────────────────────────────────────────────────
-
+#  main solver 
 def _solve(data, use_hard_weekend):
     """
     Build and solve the ILP.
@@ -76,7 +120,7 @@ def _solve(data, use_hard_weekend):
     SECTIONS = [s["name"] for s in sections_cfg]
     COURSES  = [c["code"] for c in courses_cfg]
 
-    # ── lookups ───────────────────────────────────────────────────────────────
+    #  lookups 
     course_meta  = {c["code"]: c for c in courses_cfg}
     faculty_meta = {f["shortName"]: f for f in faculty_cfg}
 
@@ -95,7 +139,7 @@ def _solve(data, use_hard_weekend):
 
     max_load = {f["shortName"]: int(f.get("maxLoadPerDay", 2)) for f in faculty_cfg}
 
-    # ── calendar ──────────────────────────────────────────────────────────────
+    #  calendar 
     calendar = _generate_calendar(sections_cfg, start_date, end_date)
 
     slot_info = {}
@@ -109,7 +153,7 @@ def _solve(data, use_hard_weekend):
     def week_of(s, t): return slot_info[(s, t)]["date"].isocalendar()[1]
     def ft_of(s, t):   return slot_info[(s, t)]["from_time"]
 
-    # ── validation ────────────────────────────────────────────────────────────
+    #  validation 
     errors = []
     for s in SECTIONS:
         total_req   = sum(v for (sec, _), v in required.items() if sec == s)
@@ -121,7 +165,7 @@ def _solve(data, use_hard_weekend):
     if errors:
         return {"status": "error", "message": "; ".join(errors), "timetable": []}
 
-    # ── index structures ──────────────────────────────────────────────────────
+    #  index structures 
     sc_week_slots = defaultdict(list)   # (s,c,w) -> [t,...]
     for s in SECTIONS:
         for c in COURSES:
@@ -148,21 +192,25 @@ def _solve(data, use_hard_weekend):
         for t in range(n_slots[s]):
             date_slots[s][date_of(s, t)].append(t)
 
-    # ── decision variables ────────────────────────────────────────────────────
+    #  decision variables 
     prob = pulp.LpProblem("Class_Timetable", pulp.LpMinimize)
-
+    
+    # x[s,c,t] = 1 if section s is taught course c at slot t
     x = {
         (s, c, t): pulp.LpVariable(f"x_{s}_{c}_{t}", cat="Binary")
         for s in SECTIONS for c in COURSES
         if (s, c) in valid_sc
         for t in range(n_slots[s])
     }
-
+    
+    # y[s,c,w] = 1 if section s has any session of course c in ISO week w
     y = {
         (s, c, w): pulp.LpVariable(f"y_{s}_{c}_{w}", cat="Binary")
         for (s, c, w) in sc_week_slots
     }
-
+    
+    # p[s,c,w] = penalty: course c taught to section s in both week w AND w+1
+    # (only needed for soft version, but defined for hard version too for consistency)
     p = {}
     if not use_hard_weekend:
         p = {
@@ -171,20 +219,25 @@ def _solve(data, use_hard_weekend):
             if (s, c, w + 1) in sc_week_slots
         }
 
-    # ── objective ─────────────────────────────────────────────────────────────
+    #  objective 
     prob += (0 if use_hard_weekend else pulp.lpSum(p.values())), "obj"
 
-    # ── H1: exact session count ───────────────────────────────────────────────
+    # HARD CONSTRAINT H1: Exact session fulfillment
+    # Σ_t x[s,c,t] = req[s,c]   ∀ s,c
     for (s, c), req in required.items():
         prob += pulp.lpSum(x[(s, c, t)] for t in range(n_slots[s])) == req
 
-    # ── H2: every slot filled (zero slack) ───────────────────────────────────
+    # HARD CONSTRAINT H2: Exactly one course per slot (zero slack)
+    # Σ_c x[s,c,t] = 1   ∀ s,t
     for s in SECTIONS:
         valid_c = [c for c in COURSES if (s, c) in valid_sc]
         for t in range(n_slots[s]):
             prob += pulp.lpSum(x[(s, c, t)] for c in valid_c) == 1
 
-    # ── H3: no faculty cloning (same date + same start time) ─────────────────
+    # HARD CONSTRAINT H3: No faculty cloning across A-E sections
+    # At any slot t, a professor can appear in at most ONE section from A-E.
+    # (A-E sections share the same time windows; F is in different time windows.)
+    # Σ_{(s,c): fac[s,c]=f, s∈A-E} x[s,c,t] ≤ 1   ∀ f,t
     for (d, ft), fac_grp in time_slot_fac.items():
         for f, triplets in fac_grp.items():
             if len(triplets) > 1:
@@ -192,7 +245,9 @@ def _solve(data, use_hard_weekend):
                     x[(s, c, t)] for (s, c, t) in triplets if (s, c, t) in x
                 ) <= 1
 
-    # ── H4: max sessions per day per faculty ──────────────────────────────────
+    # HARD CONSTRAINT H4: Max sessions per faculty per calendar day
+    # Σ_{(s,c,t): date[s,t]=d, fac[s,c]=f} x[s,c,t] ≤ max_load   ∀ f,d
+    # (This is the binding constraint that links A-E and Section F schedules.)
     for (f, d), triplets in fac_date_slots.items():
         ml = max_load.get(f, 2)
         if len(triplets) > ml:
@@ -200,7 +255,8 @@ def _solve(data, use_hard_weekend):
                 x[(s, c, t)] for (s, c, t) in triplets if (s, c, t) in x
             ) <= ml
 
-    # ── H5: no same course twice in one day for a section ────────────────────
+    # HARD CONSTRAINT H5: No same course twice in one day for a section
+    # Σ_{t: date[s,t]=d} x[s,c,t] ≤ 1   ∀ s,c,d
     for s in SECTIONS:
         for c in COURSES:
             if (s, c) not in valid_sc:
@@ -211,7 +267,8 @@ def _solve(data, use_hard_weekend):
                         x[(s, c, t)] for t in day_slots if (s, c, t) in x
                     ) <= 1
 
-    # ── H6: faculty unavailability ────────────────────────────────────────────
+    # HARD CONSTRAINT H6: Faculty unavailability
+    # x[s,c,t] = 0  if fac[s,c] is unavailable on date[s,t]
     for s in SECTIONS:
         for c in COURSES:
             if (s, c) not in valid_sc:
@@ -221,25 +278,36 @@ def _solve(data, use_hard_weekend):
                 if date_of(s, t) in unavail.get(f, set()):
                     prob += x[(s, c, t)] == 0
 
-    # ── y linkage (auxiliary: y=1 iff any session in week) ───────────────────
+    # AUXILIARY: Link y[s,c,w] to x[s,c,t]
+    # (S1) y[s,c,w] ≥ x[s,c,t]           ∀ t in week w  (force y=1 if any session)
+    # (S2) y[s,c,w] ≤ Σ_{t∈w} x[s,c,t]  (force y=0 if no sessions in week)
     for (s, c, w), week_slots in sc_week_slots.items():
         valid_slots = [t for t in week_slots if (s, c, t) in x]
         if not valid_slots:
             continue
+        # (S1): y ≥ each individual x in this week
         for t in valid_slots:
             prob += y[(s, c, w)] >= x[(s, c, t)]
+        # (S2): upper-bound y so it can't be 1 if no sessions scheduled
         prob += y[(s, c, w)] <= pulp.lpSum(x[(s, c, t)] for t in valid_slots)
 
-    # ── alternate-weekend rule ────────────────────────────────────────────────
+    #  alternate-weekend rule 
     if use_hard_weekend:
+        # HARD VERSION: y[s,c,w] + y[s,c,w+1] ≤ 1   ∀ s,c, consecutive (w,w+1)
+        # This is the constraint that is expected to cause INFEASIBILITY
+        # because supply == demand leaves no room to avoid consecutive weeks.
         for (s, c, w) in list(y.keys()):
             if (s, c, w + 1) in y:
                 prob += y[(s, c, w)] + y[(s, c, w + 1)] <= 1
     else:
+        # SOFT VERSION: penalize consecutive weeks via penalty variable p
+        # (S3) p[s,c,w] ≥ y[s,c,w] + y[s,c,w+1] - 1
+        # When both y[s,c,w]=1 and y[s,c,w+1]=1, RHS = 1, so p is forced ≥ 1 (→ =1).
+        # Otherwise RHS ≤ 0, so constraint is trivially satisfied (p ≥ 0 suffices).
         for (s, c, w) in p:
             prob += p[(s, c, w)] >= y[(s, c, w)] + y[(s, c, w + 1)] - 1
 
-    # ── solve ─────────────────────────────────────────────────────────────────
+    #  solve 
     solver = pulp.PULP_CBC_CMD(msg=0, timeLimit=120)
     prob.solve(solver)
 
@@ -253,7 +321,7 @@ def _solve(data, use_hard_weekend):
             "message": f"Solver: {status_str}",
         }
 
-    # ── extract timetable ─────────────────────────────────────────────────────
+    #  extract timetable 
     timetable = []
     for (s, c, t), var in x.items():
         if round(pulp.value(var) or 0) == 1:
@@ -285,7 +353,6 @@ def _solve(data, use_hard_weekend):
         "message": "Schedule generated successfully.",
     }
 
-
 def run_solver(data):
     """Try hard constraint first; fall back to soft if infeasible."""
     result = _solve(data, use_hard_weekend=True)
@@ -295,8 +362,7 @@ def run_solver(data):
     return result
 
 
-# ── verifier ──────────────────────────────────────────────────────────────────
-
+#  verifier 
 def verify_timetable(data, timetable):
     if not timetable:
         return {"error": "Empty timetable"}

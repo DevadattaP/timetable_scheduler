@@ -1,1 +1,4 @@
 __pycache__
+documentation/*
+!documentation/*.pdf
+!documentation/*.tex
