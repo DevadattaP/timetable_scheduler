@@ -1125,13 +1125,33 @@ function exportToExcel() {
  
   // ── TIMETABLE sheet (only if generated) 
   if (State.timetable && State.timetable.length) {
-    const ttHeader = ['Date', 'Day', 'From Time', 'To Time', 'Section', 'Course Code', 'Course Title', 'Faculty Short', 'Faculty Full'];
-    const ttRows   = State.timetable.map(r =>
-      [r.date, r.day, r.fromTime, r.toTime, r.section, r.courseCode, r.courseTitle, r.facultyShort, r.faculty]
+    const tt = State.timetable;
+
+    // Collect unique sections in sorted order
+    const ttSections = [...new Set(tt.map(r => r.section))].sort();
+
+    // Pivot: group by date + day + fromTime + toTime
+    const pivotMap = new Map();
+    tt.forEach(r => {
+      const key = `${r.date}||${r.day}||${r.fromTime}||${r.toTime}`;
+      if (!pivotMap.has(key)) pivotMap.set(key, { date: r.date, day: r.day, fromTime: r.fromTime, toTime: r.toTime, cells: {} });
+      pivotMap.get(key).cells[r.section] = `${r.courseShort || r.courseCode} (${r.facultyShort || ''})`;
+    });
+
+    // Sort pivot rows by date then fromTime
+    const pivotRows = [...pivotMap.values()].sort((a, b) =>
+      a.date.localeCompare(b.date) || a.fromTime.localeCompare(b.fromTime)
     );
+
+    const ttHeader = ['Date', 'Day', 'From Time', 'To Time', ...ttSections];
+    const ttRows   = pivotRows.map(p =>
+      [p.date, p.day, p.fromTime, p.toTime, ...ttSections.map(s => p.cells[s] || '')]
+    );
+
     const wsTT = XLSX.utils.aoa_to_sheet([ttHeader, ...ttRows]);
-    setColWidths(wsTT, [12, 10, 10, 10, 9, 14, 34, 14, 28]);
+    setColWidths(wsTT, [12, 10, 10, 10, ...ttSections.map(() => 10)]);
     freezeHeader(wsTT);
+
     const meta = State.timetableMeta;
     if (meta) {
       // Append generation info two rows below the table
@@ -1260,50 +1280,74 @@ function importFromExcel(file) {
         const timetable = [];
         const meta = {};
 
+        // Build lookup maps from already-parsed config (shortTitle → course, shortName → faculty)
+        const courseByShort = Object.fromEntries(
+          (State.courses || []).map(c => [c.shortTitle, c])
+        );
+        const courseByCode  = Object.fromEntries(
+          (State.courses || []).map(c => [c.code, c])
+        );
+        const facultyByShort = Object.fromEntries(
+          (State.faculty || []).map(f => [f.shortName, f])
+        );
+
+        // Fixed columns; anything beyond is a section column
+        const fixedCols = new Set(['Date', 'Day', 'From Time', 'To Time']);
+
         ttRows.forEach(r => {
-          // Detect metadata rows
-          if (String(r['Date']).trim() === '__META__') {
+          // Detect metadata sentinel rows
+          if (String(r['Date'] || '').trim() === '__META__') {
             const key = String(r['Day'] || '').trim();
             const val = String(r['From Time'] || '').trim();
-
             if (key === 'Generated At') meta.timestamp = val;
             if (key === 'Constraint')   meta.constraintType = val;
             if (key === 'Penalty')      meta.penalty = val;
-
             return;
           }
 
-          // Normal timetable rows
-          if (r['Date'] && r['Section']) {
-            timetable.push({
-              date:        String(r['Date']          || '').trim(),
-              day:         String(r['Day']           || '').trim(),
-              fromTime:    String(r['From Time']     || '').trim(),
-              toTime:      String(r['To Time']       || '').trim(),
-              timeLabel:   `${String(r['From Time']||'').trim()} - ${String(r['To Time']||'').trim()}`,
-              section:     String(r['Section']       || '').trim(),
-              courseCode:  String(r['Course Code']   || '').trim(),
-              courseTitle: String(r['Course Title']  || '').trim(),
-              courseShort: String(r['Course Code']   || '').trim(),
-              facultyShort:String(r['Faculty Short'] || '').trim(),
-              faculty:     String(r['Faculty Full']  || '').trim(),
-            });
-          }
+          if (!r['Date']) return;
+
+          const date      = String(r['Date']      || '').trim();
+          const day       = String(r['Day']       || '').trim();
+          const fromTime  = String(r['From Time'] || '').trim();
+          const toTime    = String(r['To Time']   || '').trim();
+          const timeLabel = `${fromTime} - ${toTime}`;
+
+          // Each non-fixed column is a section
+          Object.keys(r).forEach(col => {
+            if (fixedCols.has(col)) return;
+            const cellVal = String(r[col] || '').trim();
+            if (!cellVal) return;
+
+            const section = col.trim();
+
+            // Parse "SHORTNAME (FACULTYSHORT)" — faculty short may contain spaces
+            const match = cellVal.match(/^(.+?)\s*\((.+)\)$/);
+            const rawShort  = match ? match[1].trim() : cellVal;
+            const facShort  = match ? match[2].trim() : '';
+
+            // Resolve course
+            const course     = courseByShort[rawShort] || courseByCode[rawShort] || null;
+            const courseCode  = course ? course.code       : rawShort;
+            const courseTitle = course ? course.title      : rawShort;
+            const courseShort = course ? course.shortTitle : rawShort;
+
+            // Resolve faculty
+            const facObj  = facultyByShort[facShort] || null;
+            const faculty = facObj ? facObj.fullName : facShort;
+
+            timetable.push({ date, day, fromTime, toTime, timeLabel, section, courseCode, courseTitle, courseShort, facultyShort: facShort, faculty });
+          });
         });
 
         State.timetable = timetable;
         set(KEY.timetable, State.timetable);
 
-        if (Object.keys(meta).length) {
-          State.timetableMeta = meta;
-        } else {
-          State.timetableMeta = {
-            timestamp: new Date().toISOString(),
-            constraintType: 'imported',
-            penalty: '?'
-          };
-        }
-
+        State.timetableMeta = Object.keys(meta).length ? meta : {
+          timestamp: new Date().toISOString(),
+          constraintType: 'imported',
+          penalty: '?'
+        };
         set(KEY.timetableMeta, State.timetableMeta);
       }
  
