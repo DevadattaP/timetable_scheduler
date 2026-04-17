@@ -11,6 +11,9 @@ SETS:
   T_s = {0, ..., 39}                 — Slot indices for section s (40 slots each)
   F  = set of faculty members
   W  = set of ISO week numbers in the quarter
+  G  = set of course conflict groups  
+  C_g = set of courses in conflict group g  
+  S_g = set of sections to which conflict group g applies  
  
 PARAMETERS:
   req[s,c]        = number of sessions section s must have for course c
@@ -40,7 +43,8 @@ HARD CONSTRAINTS:
   (H4) Max m Sessions/Day:   Σ_{(s,c,t): date[s,t]=d, fac[s,c]=f} x[s,c,t] ≤ m  ∀ f,d
   (H5) Course Spacing:       Σ_{t: date[s,t]=d} x[s,c,t] ≤ 1     ∀ s,c,d
   (H6) Unavailability:       x[s,c,t] = 0  if fac[s,c] unavailable on date[s,t]
-  (H7) Alternate Weekend:    y[s,c,w] + y[s,c,w+1] ≤ 1          ∀ s,c,w
+  (H7) Course Conflicts:     Σ_{c∈g} Σ_{t: date[s,t]=d} x[s,c,t] ≤ 1  ∀ g,d   (for sections that group g applies to)
+  (H8) Alternate Weekend:    y[s,c,w] + y[s,c,w+1] ≤ 1          ∀ s,c,w
  
 SOFT CONSTRAINT LINEARIZATION (alternate weekend rule):
   (S1) y[s,c,w] ≥ x[s,c,t]           ∀ s,c,t where week[s,t]=w  (y=1 if any session)
@@ -277,6 +281,30 @@ def _solve(data, use_hard_weekend):
             for t in range(n_slots[s]):
                 if date_of(s, t) in unavail.get(f, set()):
                     prob += x[(s, c, t)] == 0
+    
+    # H7: course conflict groups with section filtering (courses that cannot run simultaneously for certain sections) 
+    for group in data.get("courseConflicts", []):
+        group_courses = set(group.get("courses", []))
+        group_sections = set(group.get("sections", []))
+
+        dt_ft_triplets = defaultdict(list)
+
+        for s in SECTIONS:
+            if s not in group_sections:
+                continue
+
+            for c in group_courses:
+                if (s, c) not in valid_sc:
+                    continue
+
+                for t in range(n_slots[s]):
+                    dt_ft_triplets[(date_of(s, t), ft_of(s, t))].append((s, c, t))
+
+        # Σ_{c∈g} Σ_{t: date[s,t]=d} x[s,c,t] ≤ 1  ∀ g,d   (for sections that group g applies to)
+        for triplets in dt_ft_triplets.values():
+            valid_triplets = [tr for tr in triplets if tr in x]
+            if len(valid_triplets) > 1:
+                prob += pulp.lpSum(x[tr] for tr in valid_triplets) <= 1
 
     # AUXILIARY: Link y[s,c,w] to x[s,c,t]
     # (S1) y[s,c,w] ≥ x[s,c,t]           ∀ t in week w  (force y=1 if any session)
@@ -308,7 +336,7 @@ def _solve(data, use_hard_weekend):
             prob += p[(s, c, w)] >= y[(s, c, w)] + y[(s, c, w + 1)] - 1
 
     #  solve 
-    solver = pulp.PULP_CBC_CMD(msg=0, timeLimit=120)
+    solver = pulp.PULP_CBC_CMD(msg=False, timeLimit=120)
     prob.solve(solver)
 
     status_str = pulp.LpStatus[prob.status]

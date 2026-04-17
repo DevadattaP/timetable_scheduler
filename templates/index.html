@@ -35,7 +35,7 @@
   <button class="tab-btn" data-tab="timetable">Timetable</button>
 </nav>
 
-<!-- ═══════════════ ABOUT TAB ═══════════════ -->
+<!-- ABOUT TAB -->
 <div id="tab-about" class="tab-content active">
   <div class="section-header">
     <div>
@@ -89,7 +89,7 @@
   </div>
 </div>
 
-<!-- ═══════════════ CONFIGURE TAB ═══════════════ -->
+<!-- CONFIGURE TAB -->
 <div id="tab-configure" class="tab-content">
   <nav class="sub-nav">
     <button class="subtab-btn active" data-subtab="sections">Sections</button>
@@ -128,6 +128,14 @@
       <button class="btn btn-primary" id="add-course-btn">+ Add Course</button>
     </div>
     <div id="courses-list"></div>
+    <div class="card" style="margin-top:1.25rem">
+      <div class="card-title">⛔ Course Conflict Groups</div>
+      <p style="font-size:.82rem;color:var(--text2);margin-bottom:.85rem;line-height:1.6">
+        Courses in the same group will never be scheduled at the same time slot, even across different sections.
+      </p>
+      <div id="conflicts-list"></div>
+      <button class="btn btn-ghost btn-sm" id="add-conflict-btn" style="margin-top:.5rem">+ Add Conflict Group</button>
+    </div>
   </div>
 
   <!-- FACULTY -->
@@ -149,7 +157,7 @@
   </div>
 </div>
 
-<!-- ═══════════════ TIMETABLE TAB ═══════════════ -->
+<!-- TIMETABLE TAB -->
 <div id="tab-timetable" class="tab-content">
   <div class="section-header">
     <div><h2>Timetable</h2><p>Generate and verify the optimized schedule</p></div>
@@ -192,7 +200,7 @@
   </div>
 </div>
 
-<!-- ═══════════════ MODAL ═══════════════ -->
+<!-- MODAL -->
 <div class="modal-overlay" id="modal-overlay">
   <div class="modal-box" id="modal-box">
     <div class="modal-header">

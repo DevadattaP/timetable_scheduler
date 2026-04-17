@@ -21,6 +21,9 @@ This formulation represents the scheduling problem for the IIM EPGP Quarter II, 
     \item $f \in F$: Set of Faculty members.
     \item $d \in D$: Set of unique Calendar Dates in the quarter.
     \item $w \in W$: Set of ISO Week numbers in the quarter.
+    \item $g \in G$: Set of course conflict groups.
+    \item $C_g \subseteq C$: Set of courses in conflict group $g$.
+    \item $S_g \subseteq S$: Set of sections to which conflict group $g$ applies.
 \end{itemize}
 
 \section{Parameters}
@@ -97,6 +100,13 @@ on the same day.
     \end{equation}
     Classes cannot be scheduled if the assigned faculty is unavailable on
 that date.
+
+    \item \textbf{H7: Course Conflict Groups with Section Scope}
+    \begin{equation}
+    \sum_{s \in S_g} \sum_{c \in C_g} x_{s,c,t} \leq 1 
+    \quad \forall g \in G,\; \forall t \in T
+    \end{equation}
+    For each conflict group $g$, at most one course from the group can be scheduled at any given time slot across the selected sections $S_g$.
 
     \item \textbf{Hard Alternate Weekend Constraint (Optional)}
     \begin{equation}

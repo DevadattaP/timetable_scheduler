@@ -1,11 +1,10 @@
-// ════════════════════════════════════════════════════════════════════
 // STORAGE & STATE
 const KEY = {
   sections:'program_sections', courses:'program_courses',
   faculty:'program_faculty', mappings:'program_mappings',
   startDate:'program_startDate', endDate:'program_endDate',
   timetable:'program_timetable', timetableMeta:'program_timetableMeta',
-  configEdit:'program_configLastEdit',
+  configEdit:'program_configLastEdit', conflicts: 'program_conflicts',
 };
 const get = k => { try{ return JSON.parse(localStorage.getItem(k)) }catch{ return null } };
 const set = (k,v) => localStorage.setItem(k, JSON.stringify(v));
@@ -17,7 +16,7 @@ function touchConfig() {
 }
 
 let State = {
-  sections: [], courses: [], faculty: [], mappings: [],
+  sections: [], courses: [], faculty: [], mappings: [], courseConflicts: [],
   startDate:'', endDate:'',
   timetable: null, timetableMeta: null,
 };
@@ -31,6 +30,7 @@ function loadState() {
   State.endDate     = get(KEY.endDate)      || '';
   State.timetable   = get(KEY.timetable)    || null;
   State.timetableMeta = get(KEY.timetableMeta) || null;
+  State.courseConflicts = get(KEY.conflicts) || [];
 }
 
 function saveSection()  { set(KEY.sections, State.sections); touchConfig(); }
@@ -317,6 +317,133 @@ function renderCourses() {
 
 document.getElementById('add-course-btn').addEventListener('click',()=>openCourseModal('add',null));
 
+// COURSES CONFLICTS CRUD
+function saveConflicts() { set(KEY.conflicts, State.courseConflicts); touchConfig(); }
+
+function renderConflicts() {
+  const el = document.getElementById('conflicts-list');
+  if (!el) return;
+  if (!State.courseConflicts.length) {
+    el.innerHTML = `<div style="font-size:.82rem;color:var(--muted);padding:.4rem 0">No conflict groups defined.</div>`;
+    return;
+  }
+  const cMap = Object.fromEntries(State.courses.map(c => [c.code, c]));
+  el.innerHTML = State.courseConflicts.map((group, i) => {
+    const allSections = State.sections.map(s => s.name);
+    const isAllSections =
+      group.sections.length === allSections.length &&
+      group.sections.every(s => allSections.includes(s));
+
+    return `
+      <div class="slot-row" style="align-items:center;flex-wrap:wrap;gap:.5rem;margin-bottom:.5rem">
+        
+        <span style="font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;flex-shrink:0">
+          Group ${i+1}
+        </span>
+
+        <!-- COURSES -->
+        <div style="display:flex;flex-wrap:wrap;gap:.35rem;flex:1">
+          ${group.courses.map(code => {
+            const c = cMap[code];
+            return `<span class="badge badge-blue" style="font-family:var(--font-m)">
+              ${c ? c.shortTitle || code : code}
+            </span>`;
+          }).join('')}
+        </div>
+
+        <!-- SECTIONS -->
+        <div style="display:flex;flex-wrap:wrap;gap:.35rem;flex:1">
+          ${
+            isAllSections
+              ? `<span class="badge badge-grey">All Sections</span>`
+              : group.sections.map(sec => `
+                  <span class="badge badge-grey">Sec ${sec}</span>
+                `).join('')
+          }
+        </div>
+
+        <button class="btn btn-ghost btn-icon btn-sm" title="Edit group" onclick="openConflictModal(${i})">✎</button>
+        <button class="btn btn-danger btn-icon btn-sm" title="Delete group" onclick="deleteConflictGroup(${i})">✕</button>
+      </div>`;
+  }).join('');
+}
+
+function conflictModalBody(groupIdx) {
+  const group = groupIdx === null ? {courses:[], sections:[]} : (State.courseConflicts[groupIdx] || {courses:[], sections:[]});
+  const courseSet = new Set(group.courses);
+  const sectionSet = new Set(group.sections);
+
+  if (!State.courses.length) return `<p>No courses defined yet.</p>`;
+
+  return `
+    <div class="modal-error" id="modal-err"></div>
+
+    <p style="font-size:.82rem;color:var(--text2)">Select courses:</p>
+    <div style="display:flex;flex-direction:column;gap:.3rem;margin-bottom:1rem">
+      ${State.courses.map(c => `
+        <label>
+          <input type="checkbox" class="conflict-course-chk" value="${c.code}" ${courseSet.has(c.code)?'checked':''}>
+          ${c.shortTitle || c.code} - ${c.title}
+        </label>
+      `).join('')}
+    </div>
+
+    <p style="font-size:.82rem;color:var(--text2)">Select sections:</p>
+    <div style="display:flex;flex-direction:column;gap:.3rem">
+      ${State.sections.map(s => `
+        <label>
+          <input type="checkbox" class="conflict-section-chk" value="${s.name}" ${sectionSet.has(s.name)?'checked':''}>
+          Section ${s.name}
+        </label>
+      `).join('')}
+    </div>
+  `;
+}
+
+function openConflictModal(groupIdx) {
+  const title = groupIdx === null ? 'Add Conflict Group' : 'Edit Conflict Group';
+  openModal(title, conflictModalBody(groupIdx), () => saveConflictModal(groupIdx));
+}
+
+function saveConflictModal(groupIdx) {
+  clearModalError();
+
+  const selectedCourses = [...document.querySelectorAll('.conflict-course-chk:checked')].map(el => el.value);
+  const selectedSections = [...document.querySelectorAll('.conflict-section-chk:checked')].map(el => el.value);
+
+  if (selectedCourses.length < 2) {
+    showModalError('Select at least 2 courses for a conflict group.');
+    return;
+  }
+  if (selectedSections.length < 1) {
+    showModalError('Select at least 1 section.');
+    return;
+  }
+
+  const obj = {
+    courses: selectedCourses,
+    sections: selectedSections
+  };
+
+  if (groupIdx === null) State.courseConflicts.push(obj);
+  else State.courseConflicts[groupIdx] = obj;
+
+  saveConflicts();
+  renderConflicts();
+  closeModal();
+  toast('Conflict group saved.', 'success');
+}
+
+function deleteConflictGroup(i) {
+  confirm2('Delete Conflict Group', 'Remove this conflict group?', () => {
+    State.courseConflicts.splice(i, 1);
+    saveConflicts(); renderConflicts();
+    toast('Conflict group removed.', 'warning');
+  });
+}
+
+document.getElementById('add-conflict-btn').addEventListener('click', () => openConflictModal(null));
+
 // FACULTY CRUD
 let _dateCounter = 0;
 function addDateRow(val='') {
@@ -500,6 +627,7 @@ function getConfigData() {
     courses:    State.courses,
     faculty:    State.faculty,
     mappings:   State.mappings,
+    courseConflicts: State.courseConflicts,
   };
 }
 
@@ -529,6 +657,10 @@ async function generateTimetable() {
     clearInterval(timer); btn.disabled=false; btn.innerHTML='⚡ Generate Timetable';
     if(data.status==='error'){
       toast('Error: '+data.message,'error'); return;
+    }
+    if(data.status==='infeasible'){
+      toast('No feasible timetable found — even with soft constraints. Check your configuration (slots, required sessions, faculty availability, conflict groups).','error');
+      return;
     }
     State.timetable = data.timetable;
     State.timetableMeta = {
@@ -764,14 +896,14 @@ function renderTimetableRows() {
   const tt = State.timetable;
   if (!tt || !tt.length) return;
 
-  // ── 1. Filter by date/day/time filters ──
+  // 1. Filter by date/day/time filters
   const filtered = tt.filter(r =>
     (!ActiveFilters.date.size || ActiveFilters.date.has(r.date)) &&
     (!ActiveFilters.day.size  || ActiveFilters.day.has(r.day)) &&
     (!ActiveFilters.time.size || ActiveFilters.time.has(r.timeLabel))
   );
 
-  // ── 2. Visible sections (respects section filter) ──
+  // 2. Visible sections (respects section filter)
   const allSections = [...new Set(tt.map(r => r.section))].sort();
   const sections = allSections.filter(s => !ActiveFilters.section.size || ActiveFilters.section.has(s));
 
@@ -795,10 +927,10 @@ function renderTimetableRows() {
     return;
   }
 
-  // ── 3. Sort by date then time ──
+  // 3. Sort by date then time
   filtered.sort((a, b) => a.date.localeCompare(b.date) || a.timeLabel.localeCompare(b.timeLabel));
 
-  // ── 4. Group: outer = date+day, inner = timeLabel ──
+  // 4. Group: outer = date+day, inner = timeLabel
   const dateGroups = new Map();
   filtered.forEach(r => {
     const dk = `${r.date}||${r.day}`;
@@ -808,7 +940,7 @@ function renderTimetableRows() {
     tm.get(r.timeLabel)[r.section] = r;
   });
 
-  // ── 5. Remove time slots where ALL visible sections are empty ──
+  // 5. Remove time slots where ALL visible sections are empty
   for (const [dk, group] of dateGroups) {
     for (const [tl, sessMap] of group.times) {
       if (!sections.some(s => sessMap[s])) group.times.delete(tl);
@@ -821,7 +953,7 @@ function renderTimetableRows() {
     return;
   }
 
-  // ── 6. Render with rowspan on Date & Day ──
+  // 6. Render with rowspan on Date & Day
   tbody.innerHTML = [...dateGroups.values()].map(({ date, day, times }) => {
     const timeEntries = [...times.entries()];
     const rowspan = timeEntries.length;
@@ -1041,6 +1173,7 @@ function init() {
   renderCourses();
   renderFaculty();
   renderMappings();
+  renderConflicts();
   refreshTimetableTab();
 }
 
@@ -1054,7 +1187,7 @@ function exportToExcel() {
  
   const wb = XLSX.utils.book_new();
  
-  // ── style helpers 
+  // style helpers 
   // SheetJS CE doesn't support cell styles, but we can set col widths
   // and use a well-structured layout. Full styling requires SheetJS Pro,
   // so we use freeze panes + column widths which CE does support.
@@ -1065,7 +1198,7 @@ function exportToExcel() {
     ws['!freeze'] = { xSplit: 0, ySplit: 1 };
   }
  
-  // ── META sheet ──
+  // META sheet
   const metaRows = [
     ['Class Timetable Scheduler — Configuration Export'],
     ['Exported at', new Date().toLocaleString()],
@@ -1076,7 +1209,7 @@ function exportToExcel() {
   setColWidths(wsMeta, [28, 30]);
   XLSX.utils.book_append_sheet(wb, wsMeta, 'Meta');
  
-  // ── SECTIONS sheet 
+  // SECTIONS sheet 
   // Flatten: one row per slot (section repeated)
   const secHeader = ['Section Name', 'Weekday', 'From Time', 'To Time', 'Duration (hrs)'];
   const secRows   = [];
@@ -1090,7 +1223,7 @@ function exportToExcel() {
   freezeHeader(wsSec);
   XLSX.utils.book_append_sheet(wb, wsSec, 'Sections');
  
-  // ── COURSES sheet 
+  // COURSES sheet 
   const cHeader = ['Course Code', 'Course Title', 'Short Title', 'Credit', 'Duration', 'Required Slots'];
   const cRows   = State.courses.map(c =>
     [c.code, c.title, c.shortTitle, c.credit, c.duration, c.requiredSlots]
@@ -1100,7 +1233,7 @@ function exportToExcel() {
   freezeHeader(wsCourse);
   XLSX.utils.book_append_sheet(wb, wsCourse, 'Courses');
  
-  // ── FACULTY sheet 
+  // FACULTY sheet 
   // Flatten: one row per unavailable date (faculty repeated); if none, one row with empty date
   const fHeader = ['Full Name', 'Short Name', 'Max Load Per Day', 'Unavailable Dates (YYYY-MM-DD)'];
   const fRows   = [];
@@ -1115,7 +1248,7 @@ function exportToExcel() {
   freezeHeader(wsFac);
   XLSX.utils.book_append_sheet(wb, wsFac, 'Faculty');
  
-  // ── MAPPING sheet 
+  // MAPPING sheet 
   const mHeader = ['Section', 'Course Code', 'Faculty Short Name'];
   const mRows   = State.mappings.map(m => [m.section, m.courseCode, m.facultyShortName]);
   const wsMap   = XLSX.utils.aoa_to_sheet([mHeader, ...mRows]);
@@ -1123,7 +1256,26 @@ function exportToExcel() {
   freezeHeader(wsMap);
   XLSX.utils.book_append_sheet(wb, wsMap, 'Mapping');
  
-  // ── TIMETABLE sheet (only if generated) 
+  // CONFLICTS sheet
+  if (State.courseConflicts.length) {
+    const cfHeader = ['Group', 'Courses', 'Sections'];
+    const cfRows   = [];
+
+    State.courseConflicts.forEach((group, i) => {
+      cfRows.push([
+        i + 1,
+        group.courses.join(', '),
+        group.sections.join(', ')
+      ]);
+    });
+
+    const wsCf = XLSX.utils.aoa_to_sheet([cfHeader, ...cfRows]);
+    setColWidths(wsCf, [8, 30, 20]);
+    freezeHeader(wsCf);
+    XLSX.utils.book_append_sheet(wb, wsCf, 'Conflicts');
+  }
+ 
+  // TIMETABLE sheet (only if generated) 
   if (State.timetable && State.timetable.length) {
     const tt = State.timetable;
 
@@ -1166,7 +1318,7 @@ function exportToExcel() {
     XLSX.utils.book_append_sheet(wb, wsTT, 'Timetable');
   }
  
-  // ── Download ────
+  // Download
   const date  = new Date().toISOString().slice(0, 10);
   const fname = `Program_Timetable_Config_${date}.xlsx`;
   XLSX.writeFile(wb, fname);
@@ -1180,13 +1332,13 @@ function importFromExcel(file) {
     try {
       const wb = XLSX.read(e.target.result, { type: 'array' });
  
-      // ── helper: sheet → array of row-objects 
+      // helper: sheet → array of row-objects 
       function sheetRows(sheetName) {
         if (!wb.SheetNames.includes(sheetName)) return [];
         return XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: '' });
       }
  
-      // ── META ────
+      // META
       const metaSheet = wb.Sheets['Meta'];
       if (metaSheet) {
         const metaArr = XLSX.utils.sheet_to_json(metaSheet, { header: 1, defval: '' });
@@ -1197,7 +1349,7 @@ function importFromExcel(file) {
         if (endVal)   { State.endDate   = endVal;   set(KEY.endDate,   endVal);   }
       }
  
-      // ── SECTIONS 
+      // SECTIONS 
       const secRows = sheetRows('Sections');
       if (secRows.length) {
         const secMap = {};
@@ -1216,7 +1368,7 @@ function importFromExcel(file) {
         set(KEY.sections, State.sections);
       }
  
-      // ── COURSES ─
+      // COURSES
       const cRows = sheetRows('Courses');
       if (cRows.length) {
         State.courses = cRows
@@ -1232,7 +1384,7 @@ function importFromExcel(file) {
         set(KEY.courses, State.courses);
       }
  
-      // ── FACULTY ─
+      // FACULTY
       const fRows = sheetRows('Faculty');
       if (fRows.length) {
         const facMap = {};
@@ -1261,7 +1413,7 @@ function importFromExcel(file) {
         set(KEY.faculty, State.faculty);
       }
  
-      // ── MAPPING ─
+      // MAPPING
       const mRows = sheetRows('Mapping');
       if (mRows.length) {
         State.mappings = mRows
@@ -1273,8 +1425,38 @@ function importFromExcel(file) {
           }));
         set(KEY.mappings, State.mappings);
       }
+
+      // CONFLICTS
+      const cfRows = sheetRows('Conflicts');
+      if (cfRows.length) {
+        const parsedGroups = [];
+
+        cfRows.forEach(r => {
+          const coursesStr  = String(r['Courses']  || '').trim();
+          const sectionsStr = String(r['Sections'] || '').trim();
+
+          if (!coursesStr || !sectionsStr) return;
+
+          const courses = coursesStr
+            .split(',')
+            .map(c => c.trim())
+            .filter(Boolean);
+
+          const sections = sectionsStr
+            .split(',')
+            .map(s => s.trim())
+            .filter(Boolean);
+
+          if (courses.length >= 1 && sections.length >= 1) {
+            parsedGroups.push({ courses, sections });
+          }
+        });
+
+        State.courseConflicts = parsedGroups;
+        set(KEY.conflicts, State.courseConflicts);
+      }
  
-      // ── TIMETABLE (optional, read-only — just restore display) ────
+      // TIMETABLE (optional, read-only — just restore display)
       const ttRows = sheetRows('Timetable');
       if (ttRows.length) {
         const timetable = [];
@@ -1351,7 +1533,7 @@ function importFromExcel(file) {
         set(KEY.timetableMeta, State.timetableMeta);
       }
  
-      // ── Re-render everything ───────────
+      // Re-render everything
       touchConfig();
       if (State.startDate) document.getElementById('start-date').value = State.startDate;
       if (State.endDate)   document.getElementById('end-date').value   = State.endDate;
@@ -1359,6 +1541,7 @@ function importFromExcel(file) {
       renderCourses();
       renderFaculty();
       renderMappings();
+      renderConflicts();
       refreshTimetableTab();
  
       const counts = [
@@ -1366,6 +1549,7 @@ function importFromExcel(file) {
         State.courses.length   + ' courses',
         State.faculty.length   + ' faculty',
         State.mappings.length  + ' mappings',
+        State.courseConflicts.length + ' conflict groups',
         State.timetable && State.timetable.length ? State.timetable.length + ' timetable sessions' : null,
       ].filter(Boolean).join(', ');
       toast(`Imported: ${counts}`, 'success');

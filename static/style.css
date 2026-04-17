@@ -44,7 +44,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--font-u);line-heigh
 ::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
 ::-webkit-scrollbar-thumb:hover{background:var(--muted)}
 
-/* ── HEADER ── */
+/* HEADER */
 header{
   display:flex;align-items:center;justify-content:space-between;
   padding:0 2rem;height:56px;
@@ -102,7 +102,7 @@ header{
   #import-btn , #export-btn { padding: .2rem .5rem; font-size: .5rem;}
 }
 
-/* ── MAIN NAV ── */
+/* MAIN NAV */
 .main-nav{
   display:flex;gap:0;
   background:var(--surface);border-bottom:1px solid var(--border);
@@ -116,11 +116,11 @@ header{
 .tab-btn:hover{color:var(--text)}
 .tab-btn.active{color:var(--gold-light);border-bottom-color:var(--gold)}
 
-/* ── LAYOUT ── */
+/* LAYOUT */
 .tab-content{display:none;padding:2rem;max-width:1200px;margin:0 auto}
 .tab-content.active{display:block}
 
-/* ── SUB-NAV ── */
+/* SUB-NAV */
 .sub-nav{
   display:flex;gap:.5rem;margin-bottom:1.5rem;
   background:var(--card);border-radius:var(--rl);padding:.35rem;
@@ -136,7 +136,7 @@ header{
 .subtab-content{display:none}
 .subtab-content.active{display:block}
 
-/* ── CARDS ── */
+/* CARDS */
 .card{
   background:var(--card);border:1px solid var(--border);
   border-radius:var(--rl);padding:1.25rem 1.5rem;margin-bottom:1rem;
@@ -151,7 +151,7 @@ header{
 .section-header h2{font-family:var(--font-d);font-size:1.15rem;color:var(--text)}
 .section-header p{font-size:.8rem;color:var(--muted);margin-top:.15rem}
 
-/* ── BUTTONS ── */
+/* BUTTONS */
 .btn{
   display:inline-flex;align-items:center;gap:.4rem;
   padding:.45rem 1rem;border-radius:var(--r);font-family:var(--font-u);
@@ -172,7 +172,7 @@ header{
 .btn-lg{padding:.65rem 1.6rem;font-size:.92rem}
 .btn-icon{padding:.35rem .45rem;min-width:32px;justify-content:center}
 
-/* ── FORMS ── */
+/* FORMS */
 .form-row{display:flex;gap:1rem;margin-bottom:.85rem;flex-wrap:wrap}
 .form-group{display:flex;flex-direction:column;gap:.35rem;flex:1;min-width:140px}
 .form-group label{font-size:.78rem;color:var(--text2);font-weight:500;letter-spacing:.03em;text-transform:uppercase}
@@ -187,11 +187,11 @@ header{
 .form-group select option{background:var(--card)}
 .form-divider{border:none;border-top:1px solid var(--border);margin:1rem 0}
 
-/* ── DATE RANGE ── */
+/* DATE RANGE */
 .date-range-card{display:flex;gap:1.5rem;align-items:flex-end;flex-wrap:wrap}
 .date-range-card .form-group{min-width:180px;flex:0 0 auto}
 
-/* ── SLOT ROW ── */
+/* SLOT ROW */
 .slot-row{
   display:flex;gap:.5rem;align-items:flex-end;margin-bottom:.5rem;flex-wrap: wrap;
   background:var(--surface);padding:.6rem .75rem;border-radius:var(--r);
@@ -200,7 +200,7 @@ header{
 .slot-row .form-group{margin-bottom:0;min-width:100px}
 .slot-row .form-group label{font-size:.7rem}
 
-/* ── TABLE ── */
+/* TABLE */
 .data-table{width:100%;border-collapse:collapse;font-size:.83rem}
 .data-table th{
   text-align:left;padding:.6rem .85rem;
@@ -226,7 +226,7 @@ header{
 }
 .empty-state .empty-icon{font-size:2.5rem;margin-bottom:.75rem;opacity:.4}
 
-/* ── BADGES ── */
+/* BADGES */
 .badge{
   display:inline-flex;align-items:center;padding:.15rem .55rem;
   border-radius:20px;font-size:.72rem;font-weight:600;
@@ -239,7 +239,7 @@ header{
 .badge-grey{background:rgba(255,255,255,.06);color:var(--text2);border:1px solid var(--border)}
 .section-badge{font-size:.7rem;padding:.1rem .45rem}
 
-/* ── MODAL ── */
+/* MODAL */
 .modal-overlay{
   display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);
   z-index:1000;align-items:center;justify-content:center;padding:1.5rem;
@@ -279,11 +279,11 @@ header{
   letter-spacing:.03em;text-transform:uppercase;margin-bottom:.5rem;
 }
 
-/* ── CONFIRM MODAL ── */
+/* CONFIRM MODAL */
 #confirm-box{max-width:420px}
 #confirm-msg{color:var(--text2);font-size:.9rem;padding:.25rem 0}
 
-/* ── ABOUT ── */
+/* ABOUT */
 .about-grid{display:grid;grid-template-columns:1fr 1fr;gap:1.5rem}
 @media(max-width:700px){.about-grid{grid-template-columns:1fr}}
 .rule-list{list-style:none;padding:0}
@@ -294,7 +294,7 @@ header{
 .rule-list li:last-child{border-bottom:none}
 .rule-list li::before{content:'—';color:var(--gold);position:absolute;left:0;top:.5rem;}
 
-/* ── TIMETABLE ── */
+/* TIMETABLE */
 .meta-card{
   background:var(--card);border:1px solid var(--border);border-radius:var(--rl);
   padding:1.1rem 1.5rem;margin-bottom:1.25rem;
@@ -320,7 +320,7 @@ header{
 #tt-table thead th{
   vertical-align:center;text-align:center;
 }
-/* ── FROZEN COLUMNS (Date, Day, Time) ── */
+/* FROZEN COLUMNS (Date, Day, Time) */
 .tt-sticky-0, .tt-sticky-1, .tt-sticky-2 {
   position: sticky;
   z-index: 3;
@@ -387,13 +387,13 @@ tr:hover td.tt-sticky-2 {
   cursor:pointer;
 }
 
-/* ── COURSE COLOR CHIPS ── */
+/* COURSE COLOR CHIPS */
 .course-chip{
   display:inline-block;padding:.15rem .55rem;border-radius:4px;
   font-family:var(--font-m);font-size:.72rem;font-weight:500;
 }
 
-/* ── VERIFY ── */
+/* VERIFY */
 .verify-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:.75rem;margin-bottom:1.5rem}
 .verify-stat{
   background:var(--card);border:1px solid var(--border);border-radius:var(--rl);
@@ -411,7 +411,7 @@ tr:hover td.tt-sticky-2 {
   color:var(--text2);margin-bottom:.6rem;display:flex;align-items:center;gap:.4rem;
 }
 
-/* ── WEEK HEATMAP ── */
+/* WEEK HEATMAP */
 .heatmap-table{border-collapse:collapse;font-size:.75rem;font-family:var(--font-m)}
 .heatmap-table th{
   padding:.3rem .5rem;color:var(--muted);font-weight:400;
@@ -426,7 +426,7 @@ tr:hover td.tt-sticky-2 {
 .hm-2{background:rgba(76,175,125,.4);color:#7de8a0}
 .hm-warn{background:rgba(224,82,82,.2);color:var(--red)}
 
-/* ── SPINNER ── */
+/* SPINNER */
 .spinner{
   display:inline-block;width:14px;height:14px;
   border:2px solid rgba(255,255,255,.2);border-top-color:currentColor;
@@ -434,7 +434,7 @@ tr:hover td.tt-sticky-2 {
 }
 @keyframes spin{to{transform:rotate(360deg)}}
 
-/* ── TOAST ── */
+/* TOAST */
 #toast-container{position:fixed;bottom:1.5rem;right:1.5rem;z-index:9999;display:flex;flex-direction:column;gap:.5rem}
 .toast{
   background:var(--card2);border:1px solid var(--border);border-radius:var(--r);
