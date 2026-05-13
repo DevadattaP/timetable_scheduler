@@ -56,13 +56,13 @@
       <div class="card">
         <div class="card-title">⚙ How It Works</div>
         <ul class="rule-list">
-          <li>Configure sections, courses, faculty, and their mappings in the Configure tab.</li>
-          <li>You can even import configuration from an Excel file. <a href="{{ url_for('static', filename='Timetable_Config_LP.xlsx') }}" download>Download Template</a></li>
-          <li>Click <strong>Generate Timetable</strong> to send data to the LP solver.</li>
-          <li>The solver first attempts a <strong>Hard</strong> model (no consecutive-week violations).</li>
-          <li>If infeasible, it automatically retries with a <strong>Soft</strong> penalty model.</li>
-          <li>The generated timetable is displayed and can be verified for all constraint satisfaction.</li>
-          <li>You can export the configuration and timetable to Excel for backup or offline editing.</li>
+          <li>Configure sections, courses, faculty, mappings, and constraints in the Configure tab.</li>
+          <li>You can import configuration from an Excel file. <a href="{{ url_for('static', filename='Timetable_Config_LP.xlsx') }}" download>Download Template</a></li>
+          <li>Click <strong>Generate Timetable</strong> to send the configuration to the LP solver.</li>
+          <li>The solver always tries to satisfy all enabled <strong>Hard Constraints</strong>.</li>
+          <li>If the Consecutive Sessions Rule is enabled, the solver minimizes consecutive-period violations using a <strong>Soft Penalty Objective</strong>.</li>
+          <li>The generated timetable can be verified against all configured constraints.</li>
+          <li>You can export both configuration and timetable to Excel for backup or offline editing.</li>
         </ul>
       </div>
     </div>
@@ -74,15 +74,55 @@
           <li><strong>No Faculty Cloning:</strong> A faculty member cannot teach two sections simultaneously.</li>
           <li><strong>Max Daily Load:</strong> Faculty can teach at most N sessions per calendar day.</li>
           <li><strong>Course Spacing:</strong> A section cannot have the same course twice in one day.</li>
-          <li><strong>Unavailability:</strong> Faculty are not scheduled on blocked dates.</li>
+          <li><strong>Unavailability (optional):</strong> Faculty are not scheduled on blocked dates.</li>
+          <li><strong>Course conflicts (optional):</strong> Courses in specified groups cannot be scheduled at the same time.</li>
         </ul>
       </div>
       <div class="card">
-        <div class="card-title">✨ Soft Constraint (Optimized)</div>
+        <div class="card-title">✨ Soft Constraint — Consecutive Sessions Rule</div>
         <ul class="rule-list">
-          <li><strong>Alternate Weekend Rule:</strong> A section should not be taught the same course in two consecutive weeks.</li>
-          <li>If a perfect schedule is impossible (due to zero slack), violations are <em>minimized</em> via a penalty in the objective function.</li>
-          <li>Penalty = number of (section, course, week) pairs where the same course appears in both week W and W+1.</li>
+          <li>
+            <strong>Configurable Consecutive Limit:</strong>
+            Restrict how many consecutive periods the same course may appear for a section.
+          </li>
+
+          <li>
+            <strong>Flexible Period Unit:</strong>
+            Consecutive tracking can be applied across
+            <em>weeks</em> or <em>days</em>.
+          </li>
+
+          <li>
+            <strong>Reset Boundary:</strong>
+            Consecutive counting may optionally reset at boundaries such as
+            <em>month</em>, or remain continuous throughout the schedule.
+          </li>
+
+          <li>
+            <strong>Penalty-Based Optimization:</strong>
+            Violations are treated as soft penalties in the LP objective function,
+            while all hard constraints remain strictly enforced.
+          </li>
+
+          <li>
+            <strong>Violation Definition:</strong>
+            A penalty is added whenever the same course appears in
+            <strong>(max consecutive + 1)</strong>
+            consecutive eligible periods for the same section.
+          </li>
+
+          <li>
+            <strong>Example 1:</strong>
+            If Max Consecutive = 2 Weeks with Month Boundary,
+            a penalty is triggered when the same course runs for
+            3+ consecutive weeks within the same month.
+          </li>
+
+          <li>
+            <strong>Example 2:</strong>
+            If Max Consecutive = 1 Week with No Boundary, it works like an alternate week rule, and
+            a penalty is triggered when the same course runs for 2+ consecutive weeks within the complete schedule.
+          </li>
         </ul>
       </div>
     </div>
@@ -96,6 +136,7 @@
     <button class="subtab-btn" data-subtab="courses">Courses</button>
     <button class="subtab-btn" data-subtab="faculty">Faculty</button>
     <button class="subtab-btn" data-subtab="mapping">Mapping</button>
+    <button class="subtab-btn" data-subtab="constraints">Constraints</button>
   </nav>
 
   <!-- SECTIONS -->
@@ -154,6 +195,98 @@
       <button class="btn btn-primary" id="add-mapping-btn">+ Add Mapping</button>
     </div>
     <div id="mapping-list"></div>
+  </div>
+
+  <!-- CONSTRAINTS -->
+  <div id="subtab-constraints" class="subtab-content">
+    <div class="section-header">
+      <div><h2>Constraints</h2><p>Control which rules apply during schedule generation</p></div>
+    </div>
+
+    <div class="card" style="margin-bottom:1rem">
+      <div class="card-title">🔒 Fixed Constraints <span class="badge badge-grey section-badge">Always Applied</span></div>
+      <ul class="rule-list">
+        <li><strong>H1 – Exact Fulfillment:</strong> Every section completes exactly the required number of sessions per course.</li>
+        <li><strong>H2 – One Course per Slot:</strong> Every available slot is filled by exactly one course (zero slack).</li>
+        <li><strong>H3 – No Faculty Cloning:</strong> A faculty member cannot teach two sections simultaneously.</li>
+        <li><strong>H4 – Max Daily Workload:</strong> Faculty cannot exceed their configured maximum sessions per calendar day.</li>
+        <li><strong>H5 – Daily Course Spacing:</strong> A section cannot have the same course more than once in a single day.</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <div class="card-title">⚙ Optional Constraints</div>
+
+      <div class="constraint-item">
+        <label class="constraint-toggle">
+          <input type="checkbox" id="c-unavail" checked/>
+          <div>
+            <strong>H6 – Faculty Unavailability</strong>
+            <p>Block scheduling faculty on their marked unavailable dates.</p>
+          </div>
+        </label>
+      </div>
+
+      <hr class="form-divider"/>
+
+      <div class="constraint-item">
+        <label class="constraint-toggle">
+          <input type="checkbox" id="c-conflicts" checked/>
+          <div>
+            <strong>H7 – Course Conflict Groups</strong>
+            <p>Prevent courses in the same conflict group from running at the same time slot.</p>
+          </div>
+        </label>
+      </div>
+
+      <hr class="form-divider"/>
+
+      <div class="constraint-item">
+        <label class="constraint-toggle">
+          <input type="checkbox" id="c-consec-enabled" checked/>
+          <div>
+            <strong>Consecutive Sessions Rule</strong>
+            <span class="badge badge-gold section-badge" style="margin-left:.4rem">Soft — Penalty</span>
+            <p>Limit how many consecutive periods the same course can be taught to a section.</p>
+          </div>
+        </label>
+        <div class="constraint-detail" id="c-consec-detail">
+          <div class="form-row" style="margin-top:.85rem;align-items:flex-end;flex-wrap:wrap">
+            <div class="form-group" style="min-width:0;flex:0 0 auto">
+              <label>Max Consecutive</label>
+              <div style="display:flex;gap:.4rem;align-items:center">
+                <input type="number" id="c-consec-max" min="1" max="10" value="2"
+                      style="width:56px;text-align:center"/>
+                <select id="c-consec-unit" style="width:100px">
+                  <option value="weeks">Week(s)</option>
+                  <option value="days">Day(s)</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-group" style="min-width:0;flex:0 0 auto">
+              <label>Reset Boundary</label>
+              <select id="c-consec-boundary" style="width:160px">
+                <option value="none">None (continuous)</option>
+                <option value="month" selected>Month</option>
+              </select>
+            </div>
+          </div>
+          <p style="font-size:.77rem;color:var(--muted);margin-top:.3rem;line-height:1.5">
+            A penalty is added for each window where the same course appears in
+            <strong>(max + 1)</strong> consecutive periods. Solver minimizes total penalty.
+            <br/>
+            <em>Example: Max 2 weeks / Month boundary → penalty fires if 3+ consecutive Saturdays
+            in the same month cover the same course.</em>
+            <br/>
+            <em>If you want alternate week rule, set Max 1 week with no boundary.</em>
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div style="margin-top:1rem;display:flex;justify-content:flex-end">
+      <button class="btn btn-primary" onclick="saveConstraintConfig()">Save Constraints</button>
+    </div>
   </div>
 </div>
 

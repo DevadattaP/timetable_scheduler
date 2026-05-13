@@ -5,6 +5,7 @@ const KEY = {
   startDate:'program_startDate', endDate:'program_endDate',
   timetable:'program_timetable', timetableMeta:'program_timetableMeta',
   configEdit:'program_configLastEdit', conflicts: 'program_conflicts',
+  constraintConfig: 'program_constraintConfig',
 };
 const get = k => { try{ return JSON.parse(localStorage.getItem(k)) }catch{ return null } };
 const set = (k,v) => localStorage.setItem(k, JSON.stringify(v));
@@ -19,6 +20,7 @@ let State = {
   sections: [], courses: [], faculty: [], mappings: [], courseConflicts: [],
   startDate:'', endDate:'',
   timetable: null, timetableMeta: null,
+  constraintConfig: null,
 };
 
 function loadState() {
@@ -31,6 +33,7 @@ function loadState() {
   State.timetable   = get(KEY.timetable)    || null;
   State.timetableMeta = get(KEY.timetableMeta) || null;
   State.courseConflicts = get(KEY.conflicts) || [];
+  State.constraintConfig = get(KEY.constraintConfig) || defaultConstraintConfig();
 }
 
 function saveSection()  { set(KEY.sections, State.sections); touchConfig(); }
@@ -628,6 +631,7 @@ function getConfigData() {
     faculty:    State.faculty,
     mappings:   State.mappings,
     courseConflicts: State.courseConflicts,
+    constraintConfig: State.constraintConfig || defaultConstraintConfig(),
   };
 }
 
@@ -699,10 +703,10 @@ function refreshTimetableTab() {
   const ts = new Date(meta.timestamp);
   document.getElementById('tt-meta-time').textContent = ts.toLocaleString();
   document.getElementById('tt-meta-type').innerHTML = meta.constraintType==='hard'
-    ? '<span class="badge badge-green">Hard (strict)</span>'
-    : '<span class="badge badge-red">Soft (penalty)</span>';
+    ? '<span class="badge badge-grey">No consecutive rule</span>'
+    : '<span class="badge badge-blue">Soft (penalty minimized)</span>';
   document.getElementById('tt-meta-penalty').textContent =
-    meta.constraintType==='hard'?'0 (perfect)':meta.penalty+' violation'+(meta.penalty!==1?'s':'');
+    meta.constraintType==='hard' ? 'N/A' : meta.penalty+' violation'+(meta.penalty!==1?'s':'');
   document.getElementById('tt-meta-total').textContent = tt.length+' sessions';
 
   // stale check
@@ -764,6 +768,7 @@ function toggleFilterValue(key, el){
 
   renderTimetableRows();
 }
+
 function toggleAll(key, el){
   const opts = document.querySelectorAll(`#opts-${key} input`);
 
@@ -1018,89 +1023,239 @@ function renderVerification(data) {
   wrap.scrollIntoView({behavior:'smooth', block:'start'});
 
   // stat cards
-  const totalSess = data.sessionCount.length;
-  const okSess    = data.sessionCount.filter(r=>r.ok).length;
-  const loadViol  = data.facultyLoad.filter(r=>!r.ok).length;
-  const consec    = data.totalPenalty;
-  const clone     = data.cloneViolations.length;
-  const spacing   = data.spacingViolations.length;
-  const unavail   = data.unavailViolations.length;
+  const sessionViol = data.sessionCount.length;
+  const slotViol = data.slotAssignmentViolations.length;
+  const loadViol = data.facultyLoad.length;
+  const consec = data.totalPenalty;
+  const clone = data.cloneViolations.length;
+  const spacing = data.spacingViolations.length;
+  const unavail = data.unavailViolations.length;
+  const conflict = data.conflictViolations.length;
 
-  document.getElementById('verify-stats').innerHTML = [
-    {val:`${okSess}/${totalSess}`, label:'Session Counts OK', cls: okSess===totalSess?'ok':'fail'},
+  const stats = [
+    {val:sessionViol===0?'✓':sessionViol, label:'Session Count', cls:sessionViol===0?'ok':'fail'},
     {val:loadViol===0?'✓':loadViol, label:'Load Violations', cls:loadViol===0?'ok':'fail'},
+    {val:slotViol===0?'✓':slotViol, label:'Slot Violations', cls:slotViol===0?'ok':'fail'},
     {val:clone===0?'✓':clone, label:'Cloning Violations', cls:clone===0?'ok':'fail'},
     {val:spacing===0?'✓':spacing, label:'Spacing Violations', cls:spacing===0?'ok':'fail'},
-    {val:unavail===0?'✓':unavail, label:'Unavailability', cls:unavail===0?'ok':'fail'},
-    {val:consec===0?'✓':consec, label:'Consec. Week Violations', cls:consec===0?'ok':consec<=3?'warn':'fail'},
-  ].map(s=>`<div class="verify-stat ${s.cls}">
+  ]
+  if (State.constraintConfig.facultyUnavailability){
+    stats.push({val:unavail===0?'✓':unavail, label:'Unavailability', cls:unavail===0?'ok':'fail'});
+  }
+  if (State.constraintConfig.courseConflicts){
+    stats.push({val:conflict===0?'✓':conflict, label:'Course conflicts', cls:conflict===0?'ok':'fail'});
+  }
+  if (State.constraintConfig.consecutiveRule.enabled){
+    stats.push({val:consec===0?'✓':consec, label:'Consecutive Violations', cls:consec===0?'ok':'fail'});
+  }
+  document.getElementById('verify-stats').innerHTML = stats.map(s=>`<div class="verify-stat ${s.cls}">
     <div class="vs-val">${s.val}</div>
     <div class="vs-label">${s.label}</div>
   </div>`).join('');
 
   let html = '';
 
-  // 1. Session counts
-  html += `<div class="verify-section">
-    <div class="verify-section-title">${okSess===totalSess?'✅':'❌'} Session Count Verification</div>
-    <div class="table-wrap" style="max-height:280px"><table class="data-table">
-      <thead><tr><th>Section</th><th>Course</th><th>Required</th><th>Scheduled</th><th>Status</th></tr></thead>
-      <tbody>${data.sessionCount.map(r=>`<tr>
-        <td><span class="badge badge-gold">${r.section}</span></td>
-        <td><span class="badge badge-blue" style="font-family:var(--font-m)">${r.course}</span></td>
-        <td style="text-align:center">${r.required}</td>
-        <td style="text-align:center">${r.scheduled}</td>
-        <td style="text-align:center">${r.ok?'<span style="color:var(--green)">✓</span>':'<span style="color:var(--red)">✗</span>'}</td>
-      </tr>`).join('')}</tbody>
-    </table></div>
-  </div>`;
+  // 1. Session count violations
+  if(sessionViol > 0){
+    html += `
+    <div class="verify-section">
+      <div class="verify-section-title">
+        ❌ Session Count Violations
+      </div>
 
-  // 2. Faculty load
-  const loadIssues = data.facultyLoad.filter(r=>!r.ok);
-  html += `<div class="verify-section">
-    <div class="verify-section-title">${loadIssues.length===0?'✅':'❌'} Faculty Daily Load</div>
-    <div class="table-wrap" style="max-height:280px"><table class="data-table">
-      <thead><tr><th>Faculty</th><th>Date</th><th>Sessions</th><th>Max Allowed</th><th>Status</th></tr></thead>
-      <tbody>${data.facultyLoad.map(r=>`<tr>
-        <td>${r.faculty}</td>
-        <td style="font-family:var(--font-m);font-size:.8rem">${r.date}</td>
-        <td style="text-align:center"><span class="badge ${r.ok?'badge-green':'badge-red'}">${r.sessions}</span></td>
-        <td style="text-align:center">${r.maxAllowed}</td>
-        <td style="text-align:center">${r.ok?'<span style="color:var(--green)">✓</span>':'<span style="color:var(--red)">✗</span>'}</td>
-      </tr>`).join('')}</tbody>
-    </table></div>
-  </div>`;
+      <div class="table-wrap" style="max-height:280px">
+        <table class="data-table">
 
-  // 3. Consecutive week violations
-  html += `<div class="verify-section">
-    <div class="verify-section-title">${consec===0?'✅':'⚠'} Consecutive Week Violations (${consec} total)</div>`;
-  if(consec>0) {
-    html += `<div class="table-wrap"><table class="data-table">
-      <thead><tr><th>Section</th><th>Course</th><th>Week</th><th>Week+1</th></tr></thead>
-      <tbody>${data.consecutiveViolations.map(r=>`<tr>
-        <td><span class="badge badge-gold">${r.section}</span></td>
-        <td><span class="badge badge-blue" style="font-family:var(--font-m)">${r.course}</span></td>
-        <td>Week ${r.week}</td><td>Week ${r.weekNext}</td>
-      </tr>`).join('')}</tbody>
-    </table></div>`;
-  } else {
-    html += `<p style="font-size:.85rem;color:var(--green);padding:.4rem 0">No consecutive-week violations — alternate weekend rule perfectly satisfied.</p>`;
+          <thead>
+            <tr>
+              <th>Section</th>
+              <th>Course</th>
+              <th>Required</th>
+              <th>Scheduled</th>
+            </tr>
+          </thead>
+
+          <tbody>
+
+            ${data.sessionCount.map(r=>`
+
+              <tr>
+
+                <td>
+                  <span class="badge badge-gold">${r.section}</span>
+                </td>
+
+                <td>
+                  <span class="badge badge-blue"
+                    style="font-family:var(--font-m)">
+                    ${r.course}
+                  </span>
+                </td>
+
+                <td style="text-align:center">
+                  ${r.required}
+                </td>
+
+                <td style="text-align:center">
+                  <span class="badge badge-red">
+                    ${r.scheduled}
+                  </span>
+                </td>
+
+              </tr>
+
+            `).join('')}
+
+          </tbody>
+
+        </table>
+      </div>
+    </div>
+    `;
   }
-  html += `</div>`;
 
-  // 4. Other violations
+  // 2. Faculty load violations
+  if(loadViol > 0){
+    html += `
+    <div class="verify-section">
+
+      <div class="verify-section-title">
+        ❌ Faculty Daily Load Violations
+      </div>
+
+      <div class="table-wrap" style="max-height:280px">
+
+        <table class="data-table">
+
+          <thead>
+            <tr>
+              <th>Faculty</th>
+              <th>Date</th>
+              <th>Sessions</th>
+              <th>Max Allowed</th>
+            </tr>
+          </thead>
+
+          <tbody>
+
+            ${data.facultyLoad.map(r=>`
+
+              <tr>
+
+                <td>${r.faculty}</td>
+
+                <td style="font-family:var(--font-m);font-size:.8rem">
+                  ${r.date}
+                </td>
+
+                <td style="text-align:center">
+                  <span class="badge badge-red">
+                    ${r.sessions}
+                  </span>
+                </td>
+
+                <td style="text-align:center">
+                  ${r.maxAllowed}
+                </td>
+
+              </tr>
+
+            `).join('')}
+
+          </tbody>
+
+        </table>
+
+      </div>
+
+    </div>
+    `;
+  }
+
+  // 3. Slot assignment violations
+  if(slotViol > 0){
+    html += `
+    <div class="verify-section">
+
+      <div class="verify-section-title">
+        ❌ Slot Assignment Violations
+      </div>
+
+      <div class="table-wrap">
+
+        <table class="data-table">
+
+          <thead>
+            <tr>
+              <th>Section</th>
+              <th>Date</th>
+              <th>Time</th>
+              <th>Assigned Courses</th>
+              <th>Count</th>
+            </tr>
+          </thead>
+
+          <tbody>
+
+            ${data.slotAssignmentViolations.map(r=>`
+
+              <tr>
+
+                <td>
+                  <span class="badge badge-gold">
+                    ${r.section}
+                  </span>
+                </td>
+
+                <td style="font-family:var(--font-m)">
+                  ${r.date}
+                </td>
+
+                <td style="font-family:var(--font-m)">
+                  ${r.fromTime} - ${r.toTime}
+                </td>
+
+                <td>
+                  ${r.assignedCourses.join(', ')}
+                </td>
+
+                <td style="text-align:center">
+                  <span class="badge badge-red">
+                    ${r.count}
+                  </span>
+                </td>
+
+              </tr>
+
+            `).join('')}
+
+          </tbody>
+
+        </table>
+
+      </div>
+
+    </div>
+    `;
+  }
+
+  // 4. Cloning violations
   if(clone>0){
     html += `<div class="verify-section"><div class="verify-section-title">❌ Faculty Cloning Violations</div>
       <div class="table-wrap"><table class="data-table"><thead><tr><th>Faculty</th><th>Date</th><th>Time</th><th>Sections</th></tr></thead>
       <tbody>${data.cloneViolations.map(r=>`<tr><td>${r.faculty}</td><td>${r.date}</td><td>${r.time}</td><td>${r.sections.join(', ')}</td></tr>`).join('')}</tbody>
       </table></div></div>`;
   }
+
+  // 5. Spacing violations
   if(spacing>0){
     html += `<div class="verify-section"><div class="verify-section-title">❌ Course Spacing Violations (same course twice in one day)</div>
       <div class="table-wrap"><table class="data-table"><thead><tr><th>Section</th><th>Course</th><th>Date</th><th>Count</th></tr></thead>
       <tbody>${data.spacingViolations.map(r=>`<tr><td>${r.section}</td><td>${r.course}</td><td>${r.date}</td><td>${r.count}</td></tr>`).join('')}</tbody>
       </table></div></div>`;
   }
+
+  // 6. Faculty unavailability violations
   if(unavail>0){
     html += `<div class="verify-section"><div class="verify-section-title">❌ Unavailability Violations</div>
       <div class="table-wrap"><table class="data-table"><thead><tr><th>Faculty</th><th>Date</th><th>Section</th><th>Course</th></tr></thead>
@@ -1108,7 +1263,102 @@ function renderVerification(data) {
       </table></div></div>`;
   }
 
-  // 5. Week distribution heatmap
+  // 7. Course conflict violations
+  if(conflict > 0){
+    html += `
+    <div class="verify-section">
+
+      <div class="verify-section-title">
+        ❌ Course Conflict Violations
+      </div>
+
+      <div class="table-wrap">
+
+        <table class="data-table">
+
+          <thead>
+            <tr>
+              <th>Group</th>
+              <th>Date</th>
+              <th>Time</th>
+              <th>Courses</th>
+              <th>Sections</th>
+              <th>Count</th>
+            </tr>
+          </thead>
+
+          <tbody>
+
+            ${data.conflictViolations.map(r=>`
+
+              <tr>
+
+                <td>
+                  <span class="badge badge-red">
+                    ${r.groupIndex}
+                  </span>
+                </td>
+
+                <td style="font-family:var(--font-m)">
+                  ${r.date}
+                </td>
+
+                <td style="font-family:var(--font-m)">
+                  ${r.time}
+                </td>
+
+                <td>
+                  ${r.courses.join(', ')}
+                </td>
+
+                <td>
+                  ${r.sections.join(', ')}
+                </td>
+
+                <td style="text-align:center">
+                  <span class="badge badge-red">
+                    ${r.count}
+                  </span>
+                </td>
+
+              </tr>
+
+            `).join('')}
+
+          </tbody>
+
+        </table>
+
+      </div>
+
+    </div>
+    `;
+  }
+  
+  // 8. Consecutive violations
+  if (consec>0) {
+    const maxC = (State.constraintConfig?.consecutiveRule?.maxConsecutive) || 2;
+    const consecRuleLabel = `max ${maxC} consecutive — violations are ${maxC+1}+ in a row`;
+    html += `
+    <div class="verify-section">
+      <div class="verify-section-title">❌ Consecutive Violations — ${consecRuleLabel} (${consec} found)</div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead><tr><th>Section</th><th>Course</th><th>Window Start</th><th>Window End</th><th>Length</th></tr></thead>
+          <tbody>${data.consecutiveViolations.map(r=>`<tr>
+            <td><span class="badge badge-gold">${r.section}</span></td>
+            <td><span class="badge badge-blue" style="font-family:var(--font-m)">${r.course}</span></td>
+            <td style="font-family:var(--font-m);font-size:.8rem">${r.periodStart}</td>
+            <td style="font-family:var(--font-m);font-size:.8rem">${r.periodEnd}</td>
+            <td style="text-align:center"><span class="badge badge-red">${r.windowSize}</span></td>
+          </tr>`).join('')}</tbody>
+        </table>
+      </div>
+    </div>
+    `;
+  }
+
+  // 9. Week distribution heatmap
   html += `<div class="verify-section">
     <div class="verify-section-title">📊 Week-Course Distribution</div>
     <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.75rem" id="hm-section-btns"></div>
@@ -1138,9 +1388,9 @@ function renderVerification(data) {
 function renderHeatmap(dist, container) {
   const {weeks, courses, data: mat} = dist;
   let t = `<div style="overflow-x:auto"><table class="heatmap-table">
-    <thead><tr><th style="text-align:left;padding-right:1rem">Course \\ Week</th>${weeks.map(w=>`<th>W${w}</th>`).join('')}</tr></thead>
+    <thead><tr><th class="hm-sticky-col hm-sticky-head">Course \\ Week</th>${weeks.map(w=>`<th>W${w}</th>`).join('')}</tr></thead>
     <tbody>${courses.map((c,ci)=>`<tr>
-      <td style="text-align:left;padding-right:1rem;color:var(--text2);white-space:nowrap">
+      <td class="hm-sticky-col">
         <span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${getCourseColor(c)};margin-right:.35rem;vertical-align:middle"></span>${c}
       </td>
       ${mat.map(row=>{
@@ -1163,6 +1413,50 @@ function renderHeatmap(dist, container) {
   container.innerHTML = t;
 }
 
+function defaultConstraintConfig() {
+  return {
+    facultyUnavailability: true,
+    courseConflicts: true,
+    consecutiveRule: {
+      enabled: true,
+      maxConsecutive: 2,
+      periodUnit: 'weeks',
+      resetBoundary: 'month',
+    },
+  };
+}
+
+function applyConstraintConfigToUI(cfg) {
+  document.getElementById('c-unavail').checked           = cfg.facultyUnavailability;
+  document.getElementById('c-conflicts').checked         = cfg.courseConflicts;
+  document.getElementById('c-consec-enabled').checked    = cfg.consecutiveRule.enabled;
+  document.getElementById('c-consec-max').value          = cfg.consecutiveRule.maxConsecutive;
+  document.getElementById('c-consec-unit').value         = cfg.consecutiveRule.periodUnit;
+  document.getElementById('c-consec-boundary').value     = cfg.consecutiveRule.resetBoundary;
+  toggleConsecDetail(cfg.consecutiveRule.enabled);
+}
+
+function toggleConsecDetail(enabled) {
+  document.getElementById('c-consec-detail').style.display = enabled ? 'block' : 'none';
+}
+
+function saveConstraintConfig() {
+  const cfg = {
+    facultyUnavailability: document.getElementById('c-unavail').checked,
+    courseConflicts:       document.getElementById('c-conflicts').checked,
+    consecutiveRule: {
+      enabled:        document.getElementById('c-consec-enabled').checked,
+      maxConsecutive: parseInt(document.getElementById('c-consec-max').value) || 2,
+      periodUnit:     document.getElementById('c-consec-unit').value,
+      resetBoundary:  document.getElementById('c-consec-boundary').value,
+    },
+  };
+  State.constraintConfig = cfg;
+  set(KEY.constraintConfig, cfg);
+  touchConfig();
+  toast('Constraint configuration saved.', 'success');
+}
+
 // INIT
 function init() {
   loadState();
@@ -1175,6 +1469,8 @@ function init() {
   renderMappings();
   renderConflicts();
   refreshTimetableTab();
+  applyConstraintConfigToUI(State.constraintConfig);
+  document.getElementById('c-consec-enabled').addEventListener('change', e => toggleConsecDetail(e.target.checked));
 }
 
 init();
@@ -1274,6 +1570,21 @@ function exportToExcel() {
     freezeHeader(wsCf);
     XLSX.utils.book_append_sheet(wb, wsCf, 'Conflicts');
   }
+
+  // CONSTRAINTS sheet
+  const ccfg = State.constraintConfig || defaultConstraintConfig();
+  const csCfgRows = [
+    ['facultyUnavailability',          ccfg.facultyUnavailability],
+    ['courseConflicts',                ccfg.courseConflicts],
+    ['consecutiveRule.enabled',        ccfg.consecutiveRule.enabled],
+    ['consecutiveRule.maxConsecutive', ccfg.consecutiveRule.maxConsecutive],
+    ['consecutiveRule.periodUnit',     ccfg.consecutiveRule.periodUnit],
+    ['consecutiveRule.resetBoundary',  ccfg.consecutiveRule.resetBoundary],
+  ];
+  const wsConstraints = XLSX.utils.aoa_to_sheet([['Setting', 'Value'], ...csCfgRows]);
+  setColWidths(wsConstraints, [34, 16]);
+  freezeHeader(wsConstraints);
+  XLSX.utils.book_append_sheet(wb, wsConstraints, 'Constraints');
  
   // TIMETABLE sheet (only if generated) 
   if (State.timetable && State.timetable.length) {
@@ -1455,6 +1766,34 @@ function importFromExcel(file) {
         State.courseConflicts = parsedGroups;
         set(KEY.conflicts, State.courseConflicts);
       }
+
+      // CONSTRAINTS
+      const _toBool = v => {
+        if (typeof v === 'boolean') return v;
+        if (typeof v === 'number')  return v !== 0;
+        if (typeof v === 'string')  return v.toLowerCase() === 'true';
+        return false;
+      };
+      const csRows = sheetRows('Constraints');
+      if (csRows.length) {
+        const kv = Object.fromEntries(
+          csRows
+            .filter(r => r['Setting'])
+            .map(r => [String(r['Setting']).trim(), r['Value']])
+        );
+        const importedConstraints = {
+          facultyUnavailability: _toBool(kv['facultyUnavailability'] ?? true),
+          courseConflicts:       _toBool(kv['courseConflicts']       ?? true),
+          consecutiveRule: {
+            enabled:        _toBool(kv['consecutiveRule.enabled']          ?? true),
+            maxConsecutive: parseInt(kv['consecutiveRule.maxConsecutive'])  || 2,
+            periodUnit:     String(kv['consecutiveRule.periodUnit']  || 'weeks').trim(),
+            resetBoundary:  String(kv['consecutiveRule.resetBoundary']|| 'month').trim(),
+          },
+        };
+        State.constraintConfig = importedConstraints;
+        set(KEY.constraintConfig, importedConstraints);
+      }
  
       // TIMETABLE (optional, read-only — just restore display)
       const ttRows = sheetRows('Timetable');
@@ -1543,13 +1882,15 @@ function importFromExcel(file) {
       renderMappings();
       renderConflicts();
       refreshTimetableTab();
- 
+      applyConstraintConfigToUI(State.constraintConfig);
+      const hasImportedConstraints = csRows.length > 0;
       const counts = [
         State.sections.length  + ' sections',
         State.courses.length   + ' courses',
         State.faculty.length   + ' faculty',
         State.mappings.length  + ' mappings',
         State.courseConflicts.length + ' conflict groups',
+        hasImportedConstraints ? 'constraint config' : null,
         State.timetable && State.timetable.length ? State.timetable.length + ' timetable sessions' : null,
       ].filter(Boolean).join(', ');
       toast(`Imported: ${counts}`, 'success');

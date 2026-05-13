@@ -122,17 +122,48 @@ header{
 
 /* SUB-NAV */
 .sub-nav{
-  display:flex;gap:.5rem;margin-bottom:1.5rem;
-  background:var(--card);border-radius:var(--rl);padding:.35rem;
-  width:fit-content;
+  display:flex;
+  gap:.5rem;
+  margin-bottom:1.5rem;
+  background:var(--card);
+  border-radius:var(--rl);
+  padding:.35rem;
+
+  width:100%;
+  max-width:100%;
+
+  overflow-x:auto;
+  overflow-y:hidden;
+
+  flex-wrap:nowrap;
+  scrollbar-width:none;
+  -ms-overflow-style:none;
+}
+.sub-nav::-webkit-scrollbar{
+  display:none;
 }
 .subtab-btn{
-  background:none;border:none;color:var(--text2);font-family:var(--font-u);
-  font-size:.82rem;font-weight:500;padding:.4rem .9rem;border-radius:6px;
-  cursor:pointer;transition:all .2s;
+  background:none;
+  border:none;
+  color:var(--text2);
+  font-family:var(--font-u);
+  font-size:.82rem;
+  font-weight:500;
+  padding:.4rem .9rem;
+  border-radius:6px;
+  cursor:pointer;
+  transition:all .2s;
+
+  white-space:nowrap;
+  flex:0 0 auto;
 }
-.subtab-btn:hover{color:var(--text)}
-.subtab-btn.active{background:var(--gold-dim);color:var(--gold-light)}
+.subtab-btn:hover{
+  color:var(--text);
+}
+.subtab-btn.active{
+  background:var(--gold-dim);
+  color:var(--gold-light);
+}
 .subtab-content{display:none}
 .subtab-content.active{display:block}
 
@@ -412,7 +443,12 @@ tr:hover td.tt-sticky-2 {
 }
 
 /* WEEK HEATMAP */
-.heatmap-table{border-collapse:collapse;font-size:.75rem;font-family:var(--font-m)}
+.heatmap-table{
+  border-collapse:separate;
+  border-spacing:0;
+  font-size:.75rem;
+  font-family:var(--font-m);
+}
 .heatmap-table th{
   padding:.3rem .5rem;color:var(--muted);font-weight:400;
   border-bottom:1px solid var(--border);
@@ -425,6 +461,36 @@ tr:hover td.tt-sticky-2 {
 .hm-1{background:rgba(76,175,125,.2);color:var(--green)}
 .hm-2{background:rgba(76,175,125,.4);color:#7de8a0}
 .hm-warn{background:rgba(224,82,82,.2);color:var(--red)}
+.hm-sticky-col {
+  position: sticky;
+  left: 0;
+  z-index: 5;
+  background: var(--panel) !important;
+  background-color: var(--panel) !important;
+  
+  /* Add these lines to ensure opacity */
+  background: #ffffff !important; /* Fallback solid color */
+  background-color: #ffffff !important;
+  
+  /* Or if using CSS variables, ensure they're fully opaque */
+  /* Check that var(--panel) hex has no alpha channel */
+  
+  white-space: nowrap;
+  text-align: left;
+  padding-right: 1rem;
+  color: var(--text2);
+  
+  /* Optional: add right border instead of shadow to prevent bleed-through */
+  border-right: 2px solid var(--border);
+  
+  /* Keep or remove based on your preference */
+  box-shadow: 2px 0 8px rgba(0,0,0,.1);
+  isolation: isolate;
+}
+.hm-sticky-head{
+  z-index: 4;
+  background-color: var(--panel);
+}
 
 /* SPINNER */
 .spinner{
@@ -448,3 +514,15 @@ tr:hover td.tt-sticky-2 {
 .toast.info{border-color:var(--blue);color:var(--blue)}
 @keyframes fadeIn{from{opacity:0;transform:translateX(16px)}to{opacity:1;transform:translateX(0)}}
 @keyframes fadeOut{to{opacity:0;transform:translateX(16px)}}
+
+/* CONSTRAINT ITEMS */
+.constraint-item { padding: .75rem 0; }
+.constraint-toggle {
+  display: flex; align-items: flex-start; gap: .75rem; cursor: pointer;
+}
+.constraint-toggle input[type="checkbox"] {
+  margin-top: .25rem; flex-shrink: 0; width: 15px; height: 15px; cursor: pointer;
+}
+.constraint-toggle strong { font-size: .9rem; color: var(--text); }
+.constraint-toggle p { font-size: .82rem; color: var(--text2); margin-top: .2rem; }
+.constraint-detail { margin-left: 27px; }

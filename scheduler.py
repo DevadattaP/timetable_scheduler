@@ -4,53 +4,87 @@ Requires: pulp, pandas
 =================================================================================
 MATHEMATICAL FORMULATION SUMMARY
 ----------------------------------
- 
-SETS:
-  S  = {A, B, C, D, E, F}           — Sections
-  C  = {OR, BL, EE, IS, FM1, OB2}   — Courses
-  T_s = {0, ..., 39}                 — Slot indices for section s (40 slots each)
-  F  = set of faculty members
-  W  = set of ISO week numbers in the quarter
-  G  = set of course conflict groups  
-  C_g = set of courses in conflict group g  
-  S_g = set of sections to which conflict group g applies  
- 
-PARAMETERS:
-  req[s,c]        = number of sessions section s must have for course c
-  fac[s,c]        = faculty assigned to teach course c to section s
-  date[s,t]       = calendar date of slot t for section s
-  week[s,t]       = ISO week number of slot t for section s
-  unavail[f]      = set of dates faculty f is unavailable
-  overlap[t1,t2]  = 1 if slots t1 (for some A-E section) and t2 share the same
-                    calendar date AND same time window (always true for same
-                    slot index across A-E sections; never true between A-E and F)
- 
-DECISION VARIABLES:
-  x[s,c,t] ∈ {0,1}  — 1 if section s is taught course c at slot t
-  y[s,c,w] ∈ {0,1}  — 1 if section s has at least one session of course c in week w
-                        (auxiliary variable, derived from x)
-  p[s,c,w] ∈ {0,1}  — 1 if course c is taught to section s in BOTH week w and w+1
-                        (penalty variable for soft constraint)
- 
-OBJECTIVE:
-  VERSION 1 (Hard): Minimize 0  [feasibility problem — likely INFEASIBLE]
-  VERSION 2 (Soft): Minimize Σ_{s,c,w} p[s,c,w]  [minimize consecutive-week count]
- 
-HARD CONSTRAINTS:
-  (H1) Session Fulfillment:  Σ_t x[s,c,t] = req[s,c]              ∀ s,c
-  (H2) One Course per Slot:  Σ_c x[s,c,t] = 1                     ∀ s,t
-  (H3) No Faculty Cloning:   Σ_{(s,c): fac[s,c]=f} x[s,c,t] ≤ 1  ∀ f, t (A-E slots only)
-  (H4) Max m Sessions/Day:   Σ_{(s,c,t): date[s,t]=d, fac[s,c]=f} x[s,c,t] ≤ m  ∀ f,d
-  (H5) Course Spacing:       Σ_{t: date[s,t]=d} x[s,c,t] ≤ 1     ∀ s,c,d
-  (H6) Unavailability:       x[s,c,t] = 0  if fac[s,c] unavailable on date[s,t]
-  (H7) Course Conflicts:     Σ_{c∈g} Σ_{t: date[s,t]=d} x[s,c,t] ≤ 1  ∀ g,d   (for sections that group g applies to)
-  (H8) Alternate Weekend:    y[s,c,w] + y[s,c,w+1] ≤ 1          ∀ s,c,w
- 
-SOFT CONSTRAINT LINEARIZATION (alternate weekend rule):
-  (S1) y[s,c,w] ≥ x[s,c,t]           ∀ s,c,t where week[s,t]=w  (y=1 if any session)
-  (S2) y[s,c,w] ≤ Σ_{t∈w} x[s,c,t]  (y=0 if no sessions in week)
-  (S3) p[s,c,w] ≥ y[s,c,w] + y[s,c,w+1] - 1  ∀ s,c,w   (penalty fires if both weeks active)
 
+SETS:
+  S   = set of sections (configured by user, e.g. {A, B, C, D, E, F})
+  C   = set of course codes
+  T_s = {0, …, n_s-1}  — ordered slot indices for section s
+  F   = set of faculty short names
+  PK  = set of period keys uniquely identifying each scheduling period:
+        period_unit = "weeks" → pk = ISO year-week integer:
+                                pk = iso_year * 100 + iso_week
+                                Example: 2026-W10 → 202610
+        period_unit = "days"  → pk = date.toordinal()
+  G   = set of course conflict groups               [optional — H7]
+  C_g = set of course codes in conflict group g
+  S_g = set of sections to which conflict group g applies
+
+PARAMETERS:
+  req[s,c]   = required number of sessions for (section s, course c)
+  fac[s,c]   = faculty member assigned to teach course c to section s
+  date[s,t]  = calendar date of slot t for section s
+  pk[s,t]    = period key of slot t  (see PK definition above)
+  bk[s,t]    = boundary key of slot t; controls where the consecutive counter resets:
+                 reset_boundary = "month" → bk = date.year × 100 + date.month
+                 reset_boundary = "none"  → bk = 0  (no reset, sequence is continuous)
+  m_f        = maximum sessions faculty f may teach per calendar day
+  unavail[f] = set of calendar dates on which faculty f is unavailable  [optional — H6]
+  M          = max_consecutive (integer ≥ 1, from constraintConfig)
+               A window of (M+1) consecutive same-boundary periods triggers a penalty.
+
+DECISION VARIABLES:
+  x[s,c,t]   ∈ {0,1}  — 1 if section s is taught course c at slot t
+  y[s,c,pk]  ∈ {0,1}  — 1 if section s has ≥ 1 session of course c in period pk
+                          (auxiliary variable derived from x)
+  p[s,c,pk0] ∈ {0,1}  — 1 if the window [pk0, pk0+1, …, pk0+M] is a consecutive
+                          violation for (s, c)  (only created when consecutive rule enabled)
+
+OBJECTIVE:
+  Consecutive rule DISABLED → Minimize 0                      (pure feasibility)
+  Consecutive rule ENABLED  → Minimize Σ_{s,c,pk0} p[s,c,pk0] (minimize violations)
+
+FIXED HARD CONSTRAINTS (always applied):
+  (H1) Session Fulfillment:
+         Σ_t x[s,c,t] = req[s,c]    ∀ s, c
+
+  (H2) One Course per Slot (zero slack):
+         Σ_c x[s,c,t] = 1   ∀ s, t
+
+  (H3) No Faculty Cloning:
+         Σ_{(s,c): fac[s,c]=f} x[s,c,t] ≤ 1     ∀ f, (date, fromTime)
+         [at any given date + time window, a faculty member appears in at most one section]
+
+  (H4) Maximum Daily Workload:
+         Σ_{(s,c,t): date[s,t]=d, fac[s,c]=f} x[s,c,t] ≤ m_f    ∀ f, d
+
+  (H5) Daily Course Spacing:
+         Σ_{t: date[s,t]=d} x[s,c,t] ≤ 1    ∀ s, c, d
+
+OPTIONAL HARD CONSTRAINTS (toggled via constraintConfig):
+  (H6) Faculty Unavailability:
+         x[s,c,t] = 0   if fac[s,c] ∈ unavail and date[s,t] ∈ unavail[fac[s,c]]
+
+  (H7) Course Conflict Groups:
+         Σ_{c ∈ C_g, s ∈ S_g, t: (date[s,t], ft[s,t]) = (d, ft)} x[s,c,t] ≤ 1
+         ∀ g, (d, ft)
+         [courses in the same group may not run at the same date+time for affected sections]
+
+SOFT CONSTRAINT — Consecutive Sessions Rule (when enabled):
+  Auxiliary constraints linking y ↔ x:
+  (A1) y[s,c,pk] ≥ x[s,c,t]                      ∀ s,c,t  where pk[s,t] = pk
+       [y is forced to 1 if any session exists in period pk]
+  (A2) y[s,c,pk] ≤ Σ_{t: pk[s,t]=pk} x[s,c,t]   ∀ s, c, pk
+       [y is forced to 0 if no sessions exist in period pk]
+
+  Window eligibility — a window W = [pk0, pk0+1, …, pk0+M] is eligible for (s,c) iff:
+    (i)  All M+1 period keys exist in sc_period_slots for (s,c), AND
+    (ii) All M+1 period keys share the same boundary key bk  (when reset_boundary ≠ "none")
+         [sequences do not carry over across month boundaries, etc.]
+
+  Penalty activation:
+  (P)  p[s,c,pk0] ≥ Σ_{pk ∈ W} y[s,c,pk] - M    ∀ eligible windows W
+       When all M+1 y-values equal 1 → RHS = 1, so p is forced to 1 (violation counted).
+       When fewer than M+1 y-values equal 1 → RHS ≤ 0, constraint is slack (p stays 0).
 """
 
 import pulp
@@ -102,7 +136,7 @@ def _generate_calendar(sections, start_date, end_date):
 
 
 #  main solver 
-def _solve(data, use_hard_weekend):
+def _solve(data):
     """
     Build and solve the ILP.
 
@@ -113,6 +147,16 @@ def _solve(data, use_hard_weekend):
       timetable       : list of session dicts
       message         : human-readable note
     """
+    # --- Constraint configuration ---
+    _ccfg   = data.get("constraintConfig", {})
+    _crule  = _ccfg.get("consecutiveRule", {})
+    apply_unavail     = _ccfg.get("facultyUnavailability", True)
+    apply_conflicts   = _ccfg.get("courseConflicts", True)
+    consec_enabled    = _crule.get("enabled", True)
+    max_consecutive   = max(1, int(_crule.get("maxConsecutive", 2)))
+    period_unit       = _crule.get("periodUnit", "weeks")   # "weeks" | "days"
+    reset_boundary    = _crule.get("resetBoundary", "month") # "none" | "month"
+    
     start_date = _parse_date(data["startDate"])
     end_date   = _parse_date(data["endDate"])
 
@@ -170,14 +214,39 @@ def _solve(data, use_hard_weekend):
         return {"status": "error", "message": "; ".join(errors), "timetable": []}
 
     #  index structures 
-    sc_week_slots = defaultdict(list)   # (s,c,w) -> [t,...]
+    # Period key: unique integer per period (week-epoch or day-ordinal)
+    def _pk(d):
+        if period_unit == "weeks":
+            iso = d.isocalendar()
+            return iso.year * 100 + iso.week
+        return d.toordinal()
+
+    # Boundary key: group that resets the consecutive counter
+    def _bk(d):
+        if reset_boundary == "month": return d.year * 100 + d.month
+        return 0  # no reset
+
+    # Human-readable label for a period key (used in verify)
+    def _pk_label(pk):
+        if period_unit == "weeks":
+            year = pk // 100
+            week = pk % 100
+            return f"Wk {week}, {year}"
+        else:
+            from datetime import date as _date
+            return str(_date.fromordinal(pk))
+
+    sc_period_slots = defaultdict(list)  # (s,c,pk) -> [t,...]
+    period_boundary = {}                 # (s,pk) -> boundary key
+
     for s in SECTIONS:
         for c in COURSES:
             if (s, c) not in valid_sc:
                 continue
             for t in range(n_slots[s]):
-                w = week_of(s, t)
-                sc_week_slots[(s, c, w)].append(t)
+                pk = _pk(date_of(s, t))
+                sc_period_slots[(s, c, pk)].append(t)
+                period_boundary.setdefault((s, pk), _bk(date_of(s, t)))
 
     fac_date_slots = defaultdict(list)  # (fac, date) -> [(s,c,t), ...]
     for (s, c), f in faculty_map.items():
@@ -207,24 +276,89 @@ def _solve(data, use_hard_weekend):
         for t in range(n_slots[s])
     }
     
-    # y[s,c,w] = 1 if section s has any session of course c in ISO week w
+    # y[(s,c,pk)] = 1 if section s has ≥1 session of course c in period pk
     y = {
-        (s, c, w): pulp.LpVariable(f"y_{s}_{c}_{w}", cat="Binary")
-        for (s, c, w) in sc_week_slots
+        (s, c, pk): pulp.LpVariable(f"y_{s}_{c}_{pk}", cat="Binary")
+        for (s, c, pk) in sc_period_slots
     }
-    
-    # p[s,c,w] = penalty: course c taught to section s in both week w AND w+1
-    # (only needed for soft version, but defined for hard version too for consistency)
+
+    # Build penalty windows: each window is (max_consecutive+1) consecutive periods
+    # within the same boundary group. A penalty variable fires if ALL periods in
+    # the window have at least one session.
+    penalty_windows = []  # list of (s, c, [pk0, pk1, ..., pk_M])
     p = {}
-    if not use_hard_weekend:
-        p = {
-            (s, c, w): pulp.LpVariable(f"p_{s}_{c}_{w}", cat="Binary")
-            for (s, c, w) in sc_week_slots
-            if (s, c, w + 1) in sc_week_slots
-        }
+
+    if consec_enabled:
+        window_size = max_consecutive + 1
+        all_sc_periods = defaultdict(set)
+        for (s, c, pk) in sc_period_slots:
+            all_sc_periods[(s, c)].add(pk)
+
+        for (s, c), pset in all_sc_periods.items():
+
+            sorted_periods = sorted(pset)
+
+            for i in range(len(sorted_periods) - window_size + 1):
+
+                window = sorted_periods[i : i + window_size]
+
+                valid = True
+
+                # check consecutiveness
+                for j in range(len(window) - 1):
+
+                    cur = window[j]
+                    nxt = window[j + 1]
+
+                    if period_unit == "weeks":
+                        cur_year = cur // 100
+                        cur_week = cur % 100
+
+                        nxt_year = nxt // 100
+                        nxt_week = nxt % 100
+
+                        # expected next ISO week
+                        expected = cur_week + 1
+
+                        if nxt_year == cur_year:
+                            if nxt_week != expected:
+                                valid = False
+                                break
+
+                        elif nxt_year == cur_year + 1:
+                            # allow year rollover
+                            if not (cur_week >= 52 and nxt_week == 1):
+                                valid = False
+                                break
+                        else:
+                            valid = False
+                            break
+
+                    else:
+                        if nxt != cur + 1:
+                            valid = False
+                            break
+
+                # same boundary check
+                if valid and reset_boundary != "none":
+                    bk0 = period_boundary.get((s, window[0]), 0)
+
+                    if any(period_boundary.get((s, w), 0) != bk0 for w in window):
+                        valid = False
+
+                if valid:
+                    penalty_windows.append((s, c, window))
+
+                    key = (s, c, window[0])
+
+                    if key not in p:
+                        p[key] = pulp.LpVariable(
+                            f"p_{s}_{c}_{window[0]}",
+                            cat="Binary"
+                        )
 
     #  objective 
-    prob += (0 if use_hard_weekend else pulp.lpSum(p.values())), "obj"
+    prob += (pulp.lpSum(p.values()) if p else 0), "obj"
 
     # HARD CONSTRAINT H1: Exact session fulfillment
     # Σ_t x[s,c,t] = req[s,c]   ∀ s,c
@@ -271,79 +405,69 @@ def _solve(data, use_hard_weekend):
                         x[(s, c, t)] for t in day_slots if (s, c, t) in x
                     ) <= 1
 
-    # HARD CONSTRAINT H6: Faculty unavailability
+    # HARD CONSTRAINT H6: Faculty unavailability (optional)
     # x[s,c,t] = 0  if fac[s,c] is unavailable on date[s,t]
-    for s in SECTIONS:
-        for c in COURSES:
-            if (s, c) not in valid_sc:
-                continue
-            f = faculty_map[(s, c)]
-            for t in range(n_slots[s]):
-                if date_of(s, t) in unavail.get(f, set()):
-                    prob += x[(s, c, t)] == 0
-    
-    # H7: course conflict groups with section filtering (courses that cannot run simultaneously for certain sections) 
-    for group in data.get("courseConflicts", []):
-        group_courses = set(group.get("courses", []))
-        group_sections = set(group.get("sections", []))
-
-        dt_ft_triplets = defaultdict(list)
-
+    if apply_unavail:
         for s in SECTIONS:
-            if s not in group_sections:
-                continue
-
-            for c in group_courses:
+            for c in COURSES:
                 if (s, c) not in valid_sc:
                     continue
-
+                f = faculty_map[(s, c)]
                 for t in range(n_slots[s]):
-                    dt_ft_triplets[(date_of(s, t), ft_of(s, t))].append((s, c, t))
+                    if date_of(s, t) in unavail.get(f, set()):
+                        prob += x[(s, c, t)] == 0
+    
+    # H7: course conflict groups with section filtering (courses that cannot run simultaneously for certain sections) (optional)
+    if apply_conflicts:
+        for group in data.get("courseConflicts", []):
+            group_courses = set(group.get("courses", []))
+            group_sections = set(group.get("sections", []))
 
-        # Σ_{c∈g} Σ_{t: date[s,t]=d} x[s,c,t] ≤ 1  ∀ g,d   (for sections that group g applies to)
-        for triplets in dt_ft_triplets.values():
-            valid_triplets = [tr for tr in triplets if tr in x]
-            if len(valid_triplets) > 1:
-                prob += pulp.lpSum(x[tr] for tr in valid_triplets) <= 1
+            dt_ft_triplets = defaultdict(list)
+
+            for s in SECTIONS:
+                if s not in group_sections:
+                    continue
+
+                for c in group_courses:
+                    if (s, c) not in valid_sc:
+                        continue
+
+                    for t in range(n_slots[s]):
+                        dt_ft_triplets[(date_of(s, t), ft_of(s, t))].append((s, c, t))
+
+            # Σ_{c∈g} Σ_{t: date[s,t]=d} x[s,c,t] ≤ 1  ∀ g,d   (for sections that group g applies to)
+            for triplets in dt_ft_triplets.values():
+                valid_triplets = [tr for tr in triplets if tr in x]
+                if len(valid_triplets) > 1:
+                    prob += pulp.lpSum(x[tr] for tr in valid_triplets) <= 1
 
     # AUXILIARY: Link y[s,c,w] to x[s,c,t]
-    # (S1) y[s,c,w] ≥ x[s,c,t]           ∀ t in week w  (force y=1 if any session)
-    # (S2) y[s,c,w] ≤ Σ_{t∈w} x[s,c,t]  (force y=0 if no sessions in week)
-    for (s, c, w), week_slots in sc_week_slots.items():
-        valid_slots = [t for t in week_slots if (s, c, t) in x]
+    for (s, c, pk), period_slots_list in sc_period_slots.items():
+        valid_slots = [t for t in period_slots_list if (s, c, t) in x]
         if not valid_slots:
             continue
-        # (S1): y ≥ each individual x in this week
         for t in valid_slots:
-            prob += y[(s, c, w)] >= x[(s, c, t)]
-        # (S2): upper-bound y so it can't be 1 if no sessions scheduled
-        prob += y[(s, c, w)] <= pulp.lpSum(x[(s, c, t)] for t in valid_slots)
+            prob += y[(s, c, pk)] >= x[(s, c, t)]
+        prob += y[(s, c, pk)] <= pulp.lpSum(x[(s, c, t)] for t in valid_slots)
 
-    #  alternate-weekend rule 
-    if use_hard_weekend:
-        # HARD VERSION: y[s,c,w] + y[s,c,w+1] ≤ 1   ∀ s,c, consecutive (w,w+1)
-        # This is the constraint that is expected to cause INFEASIBILITY
-        # because supply == demand leaves no room to avoid consecutive weeks.
-        for (s, c, w) in list(y.keys()):
-            if (s, c, w + 1) in y:
-                prob += y[(s, c, w)] + y[(s, c, w + 1)] <= 1
-    else:
-        # SOFT VERSION: penalize consecutive weeks via penalty variable p
-        # (S3) p[s,c,w] ≥ y[s,c,w] + y[s,c,w+1] - 1
-        # When both y[s,c,w]=1 and y[s,c,w+1]=1, RHS = 1, so p is forced ≥ 1 (→ =1).
-        # Otherwise RHS ≤ 0, so constraint is trivially satisfied (p ≥ 0 suffices).
-        for (s, c, w) in p:
-            prob += p[(s, c, w)] >= y[(s, c, w)] + y[(s, c, w + 1)] - 1
+    # SOFT CONSECUTIVE RULE: p[(s,c,pk0)] fires when all periods in window have sessions
+    # p >= sum(y[window]) - max_consecutive  (fires when sum = max_consecutive+1 = all 1s)
+    for (s, c, window) in penalty_windows:
+        pk0 = window[0]
+        y_vars = [y[(s, c, pk)] for pk in window if (s, c, pk) in y]
+        if len(y_vars) == len(window):
+            prob += p[(s, c, pk0)] >= pulp.lpSum(y_vars) - max_consecutive
 
     #  solve 
     solver = pulp.PULP_CBC_CMD(msg=False, timeLimit=120)
     prob.solve(solver)
 
     status_str = pulp.LpStatus[prob.status]
-    if status_str not in ("Optimal", "Feasible"):
+    if status_str not in ("Optimal", "Feasible", "Infeasible"):
         return {
             "status": "infeasible",
-            "constraint_type": "hard" if use_hard_weekend else "soft",
+            "constraint_type": "soft" if consec_enabled else "hard",
             "penalty": None,
             "timetable": [],
             "message": f"Solver: {status_str}",
@@ -371,23 +495,19 @@ def _solve(data, use_hard_weekend):
             })
 
     timetable.sort(key=lambda r: (r["section"], r["date"], r["fromTime"]))
-    penalty = int(pulp.value(prob.objective) or 0) if not use_hard_weekend else 0
+    penalty = int(pulp.value(prob.objective) or 0) if consec_enabled else 0
 
     return {
         "status": "optimal",
-        "constraint_type": "hard" if use_hard_weekend else "soft",
+        "constraint_type": "soft" if consec_enabled else "hard",
         "penalty": penalty,
         "timetable": timetable,
         "message": "Schedule generated successfully.",
     }
 
 def run_solver(data):
-    """Try hard constraint first; fall back to soft if infeasible."""
-    result = _solve(data, use_hard_weekend=True)
-    if result["status"] == "optimal":
-        return result
-    result = _solve(data, use_hard_weekend=False)
-    return result
+    """Solve with configured constraints. The consecutive rule is always soft (penalty-minimized)."""
+    return _solve(data)
 
 
 #  verifier 
@@ -412,57 +532,45 @@ def verify_timetable(data, timetable):
                    for f in data["faculty"]}
 
     # 1. Session counts
-    session_check = []
+    session_violations = []
     for (s, c), req in required.items():
         actual = len(df[(df["section"] == s) & (df["courseCode"] == c)])
-        session_check.append({
-            "section": s, "course": c,
-            "required": req, "scheduled": actual,
-            "ok": actual == req,
-        })
+        if actual != req:
+            session_violations.append({"section": s, "course": c, "required": req, "scheduled": actual,})
 
-    # 2. Faculty load per day
-    df["faculty"] = df.apply(
-        lambda r: faculty_map.get((r["section"], r["courseCode"]), "?"), axis=1
-    )
-
-    load_rows = (
-        df.groupby(["faculty", "dateStr"]).size().reset_index(name="sessions")
-    )
-
-    load_check = []
-
-    # Faculty who appear in timetable
-    faculty_in_tt = set(load_rows["faculty"].unique())
-
-    # Add rows for faculty who have lectures
+    # 2. One course per slot verification
+    slot_assignment_violations = []
+    slot_groups = df.groupby(["section", "dateStr", "fromTime", "toTime"])
+    for (s, dt, ft, tt), grp in slot_groups:
+        assigned = len(grp)
+        if assigned != 1:
+            slot_assignment_violations.append({
+                "section": s,
+                "date": dt,
+                "fromTime": ft,
+                "toTime": tt,
+                "assignedCourses": grp["courseCode"].tolist(),
+                "count": assigned,
+            })
+    
+    # 3. Faculty load per day
+    df["faculty"] = df.apply(lambda r: faculty_map.get((r["section"], r["courseCode"]), "?"), axis=1)
+    load_rows = df.groupby(["faculty", "dateStr"]).size().reset_index(name="sessions")
+    faculty_load_violations = []
     for _, row in load_rows.iterrows():
         f = row["faculty"]
         ml = int(faculty_cfg.get(f, {}).get("maxLoadPerDay", 2))
-
-        load_check.append({
-            "faculty": f,
-            "date": row["dateStr"],
-            "sessions": int(row["sessions"]),
-            "maxAllowed": ml,
-            "ok": int(row["sessions"]) <= ml,
-        })
-
-    # Add faculty with ZERO lectures
-    for f in faculty_cfg.keys():
-        if f not in faculty_in_tt:
-            ml = int(faculty_cfg.get(f, {}).get("maxLoadPerDay", 2))
-            load_check.append({
+        sessions = int(row["sessions"])
+        if sessions > ml:
+            faculty_load_violations.append({
                 "faculty": f,
-                "date": "No lecture assigned",
-                "sessions": 0,
+                "date": row["dateStr"],
+                "sessions": sessions,
                 "maxAllowed": ml,
-                "ok": True,
             })
+    faculty_load_violations.sort(key=lambda x: (-x["sessions"], x["faculty"]))
 
-    load_check.sort(key=lambda x: (-x["sessions"], x["faculty"]))
-
-    # 3. No faculty cloning (same date + same fromTime + same faculty)
+    # 4. No faculty cloning (same date + same fromTime + same faculty)
     clone_violations = []
     for (dt, ft, fac), grp in df.groupby(["dateStr", "fromTime", "faculty"]):
         if len(grp) > 1:
@@ -471,7 +579,7 @@ def verify_timetable(data, timetable):
                 "sections": grp["section"].tolist(),
             })
 
-    # 4. Course spacing — no same course twice on same day for same section
+    # 5. Course spacing — no same course twice on same day for same section
     spacing_violations = []
     for (s, dt, c), grp in df.groupby(["section", "dateStr", "courseCode"]):
         if len(grp) > 1:
@@ -479,28 +587,154 @@ def verify_timetable(data, timetable):
                 "section": s, "date": dt, "course": c, "count": len(grp),
             })
 
-    # 5. Unavailability violations
+    # 6. Unavailability violations
+    _ccfg  = data.get("constraintConfig", {})
+    apply_unavail     = _ccfg.get("facultyUnavailability", True)
     unavail_violations = []
-    for _, row in df.iterrows():
-        f = row["faculty"]
-        if row["dateStr"] in unavail.get(f, set()):
-            unavail_violations.append({
-                "faculty": f, "date": row["dateStr"],
-                "section": row["section"], "course": row["courseCode"],
-            })
-
-    # 6. Consecutive-week violations
-    consec_violations = []
-    for (s, c) in required:
-        weeks = sorted(df[(df["section"] == s) & (df["courseCode"] == c)]["week"].unique())
-        for i in range(len(weeks) - 1):
-            if weeks[i + 1] == weeks[i] + 1:
-                consec_violations.append({
-                    "section": s, "course": c,
-                    "week": int(weeks[i]), "weekNext": int(weeks[i + 1]),
+    if apply_unavail:
+        for _, row in df.iterrows():
+            f = row["faculty"]
+            if row["dateStr"] in unavail.get(f, set()):
+                unavail_violations.append({
+                    "faculty": f, "date": row["dateStr"],
+                    "section": row["section"], "course": row["courseCode"],
                 })
 
-    # 7. Week-course distribution per section (for heatmap)
+    # 7. Course conflict group violations
+    apply_conflicts_v = _ccfg.get("courseConflicts", True)
+
+    conflict_violations = []
+
+    if apply_conflicts_v:
+
+        for idx, group in enumerate(data.get("courseConflicts", []), start=1):
+
+            group_courses = set(group.get("courses", []))
+            group_sections = set(group.get("sections", []))
+
+            sub = df[
+                (df["courseCode"].isin(group_courses)) &
+                (df["section"].isin(group_sections))
+            ].copy()
+
+            if sub.empty:
+                continue
+
+            grouped = sub.groupby(["dateStr", "fromTime"])
+
+            for (dt, ft), grp in grouped:
+
+                if len(grp) <= 1:
+                    continue
+
+                # if more than one conflicting course runs simultaneously
+                courses_present = grp["courseCode"].tolist()
+                sections_present = grp["section"].tolist()
+
+                # distinct course-section combinations
+                if len(grp) > 1:
+
+                    conflict_violations.append({
+                        "groupIndex": idx,
+                        "date": dt,
+                        "time": ft,
+                        "courses": sorted(set(courses_present)),
+                        "sections": sorted(set(sections_present)),
+                        "count": len(grp),
+                    })
+                    
+    # 8. Consecutive violations (respects configured rule)
+    _crule = _ccfg.get("consecutiveRule", {})
+    consec_enabled_v  = _crule.get("enabled", True)
+    max_consecutive_v = max(1, int(_crule.get("maxConsecutive", 2)))
+    period_unit_v     = _crule.get("periodUnit", "weeks")
+    reset_boundary_v  = _crule.get("resetBoundary", "month")
+
+    def _pk_v(d):
+        if period_unit_v == "weeks":
+            iso = d.isocalendar()
+            return iso.year * 100 + iso.week
+        return d.toordinal()
+
+    def _bk_v(d):
+        if reset_boundary_v == "month": return d.year * 100 + d.month
+        return 0
+
+    def _pk_label_v(pk):
+        if period_unit_v == "weeks":
+            year = pk // 100
+            week = pk % 100
+            return f"Wk {week}, {year}"
+        else:
+            from datetime import date as _d
+            return str(_d.fromordinal(pk))
+
+    consec_violations = []
+    if consec_enabled_v:
+        window_size_v = max_consecutive_v + 1
+        for (s, c) in required:
+            sub = df[(df["section"] == s) & (df["courseCode"] == c)].copy()
+            sub["pk"] = sub["date"].apply(_pk_v)
+            sub["bk"] = sub["date"].apply(_bk_v)
+            pk_to_bk = sub.groupby("pk")["bk"].first().to_dict()
+            periods = sorted(sub["pk"].unique())
+
+            for i in range(len(periods) - max_consecutive_v):
+                window = periods[i : i + window_size_v]
+                if len(window) < window_size_v:
+                    continue
+                
+                # All consecutive?
+                valid_window = True
+                for j in range(len(window) - 1):
+
+                    cur = window[j]
+                    nxt = window[j + 1]
+
+                    if period_unit_v == "weeks":
+
+                        cur_year = cur // 100
+                        cur_week = cur % 100
+
+                        nxt_year = nxt // 100
+                        nxt_week = nxt % 100
+
+                        if nxt_year == cur_year:
+                            if nxt_week != cur_week + 1:
+                                valid_window = False
+                                break
+
+                        elif nxt_year == cur_year + 1:
+                            if not (cur_week >= 52 and nxt_week == 1):
+                                valid_window = False
+                                break
+
+                        else:
+                            valid_window = False
+                            break
+
+                    else:
+                        if nxt != cur + 1:
+                            valid_window = False
+                            break
+
+                if not valid_window:
+                    continue
+                
+                # Same boundary group?
+                if reset_boundary_v != 'none':
+                    bk0 = pk_to_bk.get(window[0], 0)
+                    if any(pk_to_bk.get(w, 0) != bk0 for w in window):
+                        continue
+                consec_violations.append({
+                    "section":     s,
+                    "course":      c,
+                    "periodStart": _pk_label_v(window[0]),
+                    "periodEnd":   _pk_label_v(window[-1]),
+                    "windowSize":  window_size_v,
+                })
+
+    # 9. Week-course distribution per section (for heatmap)
     week_dist = {}
     for s in df["section"].unique():
         sub = df[df["section"] == s]
@@ -515,19 +749,23 @@ def verify_timetable(data, timetable):
         }
 
     return {
-        "sessionCount":          session_check,
-        "facultyLoad":           load_check,
-        "cloneViolations":       clone_violations,
-        "spacingViolations":     spacing_violations,
-        "unavailViolations":     unavail_violations,
+        "sessionCount": session_violations,
+        "slotAssignmentViolations": slot_assignment_violations,
+        "facultyLoad": faculty_load_violations,
+        "cloneViolations": clone_violations,
+        "spacingViolations": spacing_violations,
+        "unavailViolations": unavail_violations,
+        "conflictViolations": conflict_violations,
         "consecutiveViolations": consec_violations,
-        "weekDistribution":      week_dist,
-        "totalPenalty":          len(consec_violations),
+        "weekDistribution": week_dist,
+        "totalPenalty": len(consec_violations),
         "allClear": (
-            all(r["ok"] for r in session_check) and
-            all(r["ok"] for r in load_check) and
+            len(session_violations) == 0 and
+            len(slot_assignment_violations) == 0 and
+            len(faculty_load_violations) == 0 and
             len(clone_violations) == 0 and
             len(spacing_violations) == 0 and
-            len(unavail_violations) == 0
+            len(unavail_violations) == 0 and
+            len(conflict_violations) == 0
         ),
     }

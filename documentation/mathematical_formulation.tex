@@ -11,17 +11,26 @@
 \maketitle
 
 \section*{Introduction}
-This formulation represents the scheduling problem for the IIM EPGP Quarter II, accommodating different sections, courses, and time slots and faculties. The objective is to create an optimal schedule that minimizes conflicts and maximizes resource utilization.
+This formulation represents the scheduling problem for the IIM EPGP Quarter II, accommodating different sections, courses, time slots, and faculty members. The objective is to create an optimal schedule that satisfies all hard constraints while minimizing violations of a configurable consecutive-period soft constraint.
 
 \section{Sets and Indices}
 \begin{itemize}
     \item $s \in S$: Set of Sections.
     \item $c \in C$: Set of Courses.
-    \item $t \in T_s$: Set of Time Slots available for section $s$.
+    \item $t \in T_s$: Set of time slots available for section $s$.
     \item $f \in F$: Set of Faculty members.
     \item $d \in D$: Set of unique Calendar Dates in the quarter.
-    \item $w \in W$: Set of ISO Week numbers in the quarter.
-    \item $g \in G$: Set of course conflict groups.
+    \item $pk \in PK_s$: Set of \textbf{period keys} for section $s$ — unique integers that identify each scheduling period. The encoding is determined by the configured period unit:
+    \begin{itemize}
+        \item \texttt{period\_unit = "weeks"}:
+              $pk = \text{iso\_year} \times 100 + \text{iso\_week}$
+              \quad (e.g.\ Week 10 of 2026 $\;\rightarrow\;$ 202610)
+        \item \texttt{period\_unit = "days"}:
+              $pk = \text{date.toordinal()}$
+              \quad (unique integer per calendar day)
+    \end{itemize}
+    Two period keys $pk$ and $pk'$ are \textbf{consecutive} if they represent immediately adjacent periods — successive ISO weeks (with correct year-rollover handling) or successive calendar days. Note that \emph{arithmetic} $pk + 1$ is \textbf{not} the same as the consecutive successor for week-encoded keys (e.g.\ $202652 \to 202701$, not 202653). We write $\mathrm{succ}^j(pk_0)$ for the $j$-th consecutive successor of $pk_0$.
+    \item $g \in G$: Set of course conflict groups \quad \emph{(used by optional constraint H7)}.
     \item $C_g \subseteq C$: Set of courses in conflict group $g$.
     \item $S_g \subseteq S$: Set of sections to which conflict group $g$ applies.
 \end{itemize}
@@ -29,120 +38,171 @@ This formulation represents the scheduling problem for the IIM EPGP Quarter II, 
 \section{Parameters}
 \begin{itemize}
     \item $R_{s,c}$: Required number of sessions for section $s$ in course $c$.
-    \item $Faculty(s,c)$: The specific faculty member $f$ assigned to teach course $c$ to section
-$s$.
-    \item $Date(s, t)$: The calendar date $d$ associated with slot $t$ for section $s$.
-    \item $Week(s, t)$: The week number $w$ associated with slot $t$ for section $s$.
-    \item $Unavailable(f, d)$: A binary flag that is 1 if faculty $f$ is unavailable on date $d$, and 0
-otherwise.
-    \item $M_f$: Maximum number of sessions faculty $f$ can teach in a day.
+    \item $\mathrm{Faculty}(s,c)$: The faculty member assigned to teach course $c$ to section $s$.
+    \item $\mathrm{Date}(s,t)$: The calendar date associated with slot $t$ for section $s$.
+    \item $\mathrm{Period}(s,t)$: The period key $pk$ associated with slot $t$ for section $s$ (see $PK_s$ above).
+    \item $\mathrm{Boundary}(s,t)$: The boundary-group key of slot $t$ for section $s$. Controls where the consecutive counter resets:
+    \begin{itemize}
+        \item \texttt{reset\_boundary = "month"}:
+              $\mathrm{Boundary}(s,t) = \text{year} \times 100 + \text{month}$
+        \item \texttt{reset\_boundary = "none"}:
+              $\mathrm{Boundary}(s,t) = 0$ \quad (no reset; sequence is continuous)
+    \end{itemize}
+    \item $\mathrm{Unavailable}(f,d)$: Binary flag; 1 if faculty $f$ is unavailable on date $d$, 0 otherwise. \quad \emph{(used by optional constraint H6)}
+    \item $M_f$: Maximum sessions faculty $f$ may teach per calendar day.
+    \item $M$: Maximum number of \textbf{consecutive periods} in which the same course may be taught to the same section without incurring a penalty (user-configured; default $M=2$). A window of $M+1$ consecutive same-boundary periods that all have active sessions constitutes one violation.
 \end{itemize}
 
 \section{Decision Variables}
 \begin{itemize}
-    \item $x_{s,c,t} \in \{0, 1\}$: 1 if section $s$ is assigned course $c$ at time slot $t$; 0 otherwise.
-    \item $y_{s,c,w} \in \{0, 1\}$: Auxiliary variable; 1 if section $s$ has at least one session of course
-$c$ in week $w$; 0 otherwise.
-    \item $p_{s,c,w} \in \{0, 1\}$: Penalty variable; 1 if course $c$ is taught to section $s$ in both
-week $w$ and week $w+1$; 0 otherwise.
+    \item $x_{s,c,t} \in \{0,1\}$: 1 if section $s$ is assigned course $c$ at time slot $t$; 0 otherwise.
+    \item $y_{s,c,pk} \in \{0,1\}$: Auxiliary variable; 1 if section $s$ has at least one session of course $c$ in period $pk$; 0 otherwise.
+    \item $p_{s,c,pk_0} \in \{0,1\}$: Penalty variable; 1 if course $c$ is taught to section $s$ in \emph{every} period of the window $\bigl(pk_0,\;\mathrm{succ}(pk_0),\;\ldots,\;\mathrm{succ}^M(pk_0)\bigr)$; 0 otherwise. Created only when the consecutive rule is enabled.
 \end{itemize}
 
 \section{Objective Function}
-\begin{equation}
-\text{Minimize} \quad Z = \sum_{s \in S} \sum_{c \in C} \sum_{w \in W} p_{s,c,w}
-\end{equation}
-The goal is to minimize the total number of "Alternate Weekend" rule violations across all sections
-and courses.
+The objective depends on whether the consecutive sessions rule is enabled in the configuration.
 
-(For Hard constraint problem, there is no separate objective function, just to find feasible solution
-which satisfies all the constraints)
+\bigskip
+\noindent\textbf{Case 1 — Consecutive rule enabled (Soft):}
+\begin{equation}
+    \text{Minimize} \quad Z \;=\;
+    \sum_{s \in S}\; \sum_{c \in C}\; \sum_{pk_0} \; p_{s,c,pk_0}
+\end{equation}
+Minimize the total number of windows in which the same course is taught in $M+1$ or more consecutive same-boundary periods for the same section.
+
+\bigskip
+\noindent\textbf{Case 2 — Consecutive rule disabled (Pure feasibility):}
+\begin{equation}
+    \text{Minimize} \quad Z \;=\; 0
+\end{equation}
+No soft objective; the solver simply finds any schedule satisfying all active hard constraints.
 
 \section{Constraints}
+\subsection*{Fixed Hard Constraints (always applied)}
 \begin{itemize}
     \item \textbf{H1: Session Requirement}
     \begin{equation}
-    \sum_{t \in T_s} x_{s,c,t} = R_{s,c} \quad \forall s \in S, c \in C
+        \sum_{t \in T_s} x_{s,c,t} = R_{s,c}
+        \quad \forall\, s \in S,\; c \in C
     \end{equation}
-    Every section must complete the exact number of required sessions for
-every assigned course.
+    Every section must complete the exact required number of sessions for every assigned course.
 
     \item \textbf{H2: One Course per Slot (Zero Slack)}
     \begin{equation}
-    \sum_{c \in C} x_{s,c,t} = 1 \quad \forall s \in S, t \in T_s
+        \sum_{c \in C} x_{s,c,t} = 1
+        \quad \forall\, s \in S,\; t \in T_s
     \end{equation}
-    Each available time slot for a section must be occupied by
-exactly one course.
-    
+    Each available time slot for a section must be occupied by exactly one course. Because the total sessions required equals the total slots available, every slot is filled.
+
     \item \textbf{H3: No Faculty Cloning}
     \begin{equation}
-    \sum_{(s,c) : Faculty(s,c)=f} x_{s,c,t} <= 1 \quad \forall f \in F, t \in T_s \forall s \in S
+        \sum_{\substack{(s,c)\,:\\\mathrm{Faculty}(s,c)=f\\\mathrm{Date}(s,t)=d,\;
+              \mathrm{FromTime}(s,t)=\tau}}
+        x_{s,c,t} \;\leq\; 1
+        \quad \forall\, f \in F,\;(d,\tau)
     \end{equation}
-    A faculty member cannot teach more than one section at the same
-physical time.
+    A faculty member cannot teach more than one section at the same date and start time.
 
     \item \textbf{H4: Maximum Daily Workload}
     \begin{equation}
-    \sum_{s \in S} \sum_{c \in C} \sum_{t \in T_s : Date(s,t)=d, Faculty(s,c)=f} x_{s,c,t} <= M_f \quad \forall f \in F, d \in D
+        \sum_{s \in S}\;\sum_{c \in C}\;
+        \sum_{\substack{t \in T_s\,:\\\mathrm{Date}(s,t)=d,\\\mathrm{Faculty}(s,c)=f}}
+        x_{s,c,t} \;\leq\; M_f
+        \quad \forall\, f \in F,\; d \in D
     \end{equation}
-    A faculty member can teach a maximum of $M_f$ sessions per
-calendar date across all sections.
+    A faculty member may teach at most $M_f$ sessions per calendar date across all sections.
 
     \item \textbf{H5: Course Spacing (Daily)}
     \begin{equation}
-    \sum_{t \in T_s : Date(s,t)=d} x_{s,c,t} <= 1 \quad \forall s \in S, c \in C, d \in D
+        \sum_{\substack{t \in T_s\,:\\\mathrm{Date}(s,t)=d}}
+        x_{s,c,t} \;\leq\; 1
+        \quad \forall\, s \in S,\; c \in C,\; d \in D
     \end{equation}
-    A section cannot be scheduled for the same course more than once
-on the same day.
-
-    \item \textbf{H6: Faculty Unavailability}
-    \begin{equation}
-    x_{s,c,t} = 0 \quad \text{if } Unavailable(Faculty(s,c), Date(s,t)) = 1 \quad \forall s \in S, c \in C, t \in T_s
-    \end{equation}
-    Classes cannot be scheduled if the assigned faculty is unavailable on
-that date.
-
-    \item \textbf{H7: Course Conflict Groups with Section Scope}
-    \begin{equation}
-    \sum_{s \in S_g} \sum_{c \in C_g} x_{s,c,t} \leq 1 
-    \quad \forall g \in G,\; \forall t \in T
-    \end{equation}
-    For each conflict group $g$, at most one course from the group can be scheduled at any given time slot across the selected sections $S_g$.
-
-    \item \textbf{Hard Alternate Weekend Constraint (Optional)}
-    \begin{equation}
-    y_{s,c,w} + y_{s,c,w+1} <= 1 \quad \forall s \in S, c \in C, w \in \{1, \dots, |W|-1\}
-    \end{equation}
-    This constraint strictly prohibits scheduling the same course for the same section in consecutive weeks. This is the constraint that typically causes INFEASIBILITY because supply == demand leaves no room to avoid consecutive weeks.
+    A section cannot be scheduled for the same course more than once on the same calendar day.
 \end{itemize}
 
-\section{Soft Constraints (Linearized Penalties)}
-To minimize consecutive-week scheduling, we link the assignment variable $x$ to the week-indicator $y$, and subsequently to the penalty $p$.
+\subsection*{Optional Hard Constraints (can be disabled via configuration)}
 \begin{itemize}
-    \item \textbf{S1: Weekly Activity Identification (Lower Bound)}
+    \item \textbf{H6: Faculty Unavailability} \quad \emph{(Optional)}
     \begin{equation}
-    y_{s,c,w} >= x_{s,c,t} \quad \forall s, c, w, t \in \{t \in T_s : Week(s,t) = w\}
+        x_{s,c,t} = 0
+        \quad \text{if}\;\mathrm{Unavailable}\!\bigl(\mathrm{Faculty}(s,c),\;\mathrm{Date}(s,t)\bigr) = 1
+        \quad \forall\, s \in S,\; c \in C,\; t \in T_s
     \end{equation}
-    For each section, course, and week, the indicator variable $y_{s,c,w}$ is forced to 1 if at least one
-session is scheduled during that week.
+    A class cannot be scheduled on a date when the assigned faculty member is marked unavailable.
 
-    \item \textbf{S2: Weekly Activity Identification (Upper Bound)}
+    \item \textbf{H7: Course Conflict Groups with Section Scope} \quad \emph{(Optional)}
     \begin{equation}
-    y_{s,c,w} <= \sum_{t \in T_s : Week(s,t) = w} x_{s,c,t} \quad \forall s, c \in C, w \in W
+        \sum_{s \in S_g}\;\sum_{c \in C_g}
+        \;\sum_{\substack{t\,:\\\mathrm{Date}(s,t)=d,\\\mathrm{FromTime}(s,t)=\tau}}
+        x_{s,c,t} \;\leq\; 1
+        \quad \forall\, g \in G,\;(d,\tau)
     \end{equation}
-    To ensure $y_{s,c,w}$ remains 0 if no sessions are scheduled in a given week, we bound it by the
-sum of assignments within that week.
-
-    \item \textbf{S3: Consecutive Week Penalty Logic}
-    
-    The penalty variable $p_{s,c,w}$ is triggered only when a course is taught in both week $w$ and
-week $w+1$ for the same section.
-    \begin{equation}
-    p_{s,c,w} >= y_{s,c,w} + y_{s,c,w+1} - 1 \quad \forall s, c, w \in \{1, \dots, |W|-1\}
-    \end{equation}
-    If both $y_{s,c,w} = 1$ and $y_{s,c,w+1} = 1$, then $1 + 1 - 1 = 1$. This
-forces $p_{s,c,w} >= 1$, triggering the penalty. If either week has no sessions (0), the right-hand side is $\leq 0$. Since $p$ is
-a binary variable being minimized in the objective function, it will naturally fall to
-0.
-
+    For each conflict group $g$, at most one course from $C_g$ may run at any given date and start time across the applicable sections $S_g$.
 \end{itemize}
+
+\section{Soft Constraint: Consecutive Sessions Rule}
+When the consecutive rule is enabled, we penalize every window in which the same course is taught to the same section in $M+1$ or more consecutive same-boundary periods. The formulation uses auxiliary period-activity indicators $y$ to link slot-level decisions $x$ to the period-level penalty variables $p$.
+
+\subsection*{Window Eligibility}
+A window $\mathcal{W} = \bigl(pk_0,\;\mathrm{succ}(pk_0),\;\ldots,\;\mathrm{succ}^M(pk_0)\bigr)$ of length $M+1$ over $(s, c)$ is \textbf{eligible} if and only if:
+
+\begin{enumerate}
+    \item \textbf{Coverage:} All $M+1$ period keys in $\mathcal{W}$ exist in $PK_s$ for section $s$ with valid slots mapped to course $c$.
+    \item \textbf{Consecutiveness:} Each successive pair in $\mathcal{W}$ are adjacent periods (next ISO week, or next calendar day), including correct year-boundary handling.
+    \item \textbf{Boundary confinement} (when \texttt{reset\_boundary} $\neq$ \texttt{"none"}):
+    \begin{equation}
+        \mathrm{Boundary}(s,\,t_0) \;=\; \mathrm{Boundary}(s,\,t_j)
+        \quad \forall\, j = 1,\ldots,M
+    \end{equation}
+    where $t_0, t_j$ are representative slots in $pk_0$ and $\mathrm{succ}^j(pk_0)$ respectively. This ensures the consecutive counter resets at month (or other configured) boundaries, so violations cannot span across them.
+\end{enumerate}
+
+\subsection*{Auxiliary Constraints (linking $y_{s,c,pk}$ to $x_{s,c,t}$)}
+
+\begin{itemize}
+    \item \textbf{A1: Period Activity — Lower Bound}
+    \begin{equation}
+        y_{s,c,pk} \;\geq\; x_{s,c,t}
+        \quad \forall\, s \in S,\; c \in C,\; t \in T_s
+        \;\text{ where }\; \mathrm{Period}(s,t) = pk
+    \end{equation}
+    $y_{s,c,pk}$ is forced to 1 if \emph{any} session of course $c$ is scheduled in period $pk$ for section $s$.
+
+    \item \textbf{A2: Period Activity — Upper Bound}
+    \begin{equation}
+        y_{s,c,pk} \;\leq\; \sum_{\substack{t \in T_s\,:\\\mathrm{Period}(s,t)=pk}} x_{s,c,t}
+        \quad \forall\, s \in S,\; c \in C,\; pk \in PK_s
+    \end{equation}
+    $y_{s,c,pk}$ is forced to 0 if \emph{no} session of course $c$ is scheduled in period $pk$.
+\end{itemize}
+
+\subsection*{Penalty Activation}
+\begin{itemize}
+    \item \textbf{P: Consecutive Period Penalty}
+
+    For every eligible window $\mathcal{W} = \bigl(pk_0,\;\mathrm{succ}^1(pk_0),\;\ldots, \;\mathrm{succ}^M(pk_0)\bigr)$:
+    \begin{equation}
+        p_{s,c,pk_0} \;\geq\;
+        \sum_{pk\,\in\,\mathcal{W}} y_{s,c,pk} \;-\; M
+    \end{equation}
+
+    \noindent\textbf{Activation logic:}
+    \begin{itemize}
+        \item If every period in $\mathcal{W}$ is active ($y = 1$ for all $M+1$ periods): $\displaystyle\sum_{pk \in \mathcal{W}} y_{s,c,pk} = M+1$, so $\mathrm{RHS} = 1$, forcing $p_{s,c,pk_0} \geq 1$ — the penalty fires.
+        \item If at most $M$ periods are active:
+              $\displaystyle\sum_{pk \in \mathcal{W}} y_{s,c,pk} \leq M$, so $\mathrm{RHS} \leq 0$. Since $p \geq 0$ always holds, the constraint is slack and $p$ remains 0.
+    \end{itemize}
+
+    \bigskip
+    \noindent\textbf{Special cases recovered by this general formulation:}
+    \begin{itemize}
+        \item $M = 1$, \texttt{reset\_boundary = "none"}:
+              reduces to the classic \emph{Alternate-Week Rule} — the same course cannot be taught in two consecutive weeks (penalty fires for any pair of back-to-back active weeks).
+        \item $M = 2$, \texttt{reset\_boundary = "month"}:
+              implements the \emph{Two-Consecutive-Week Rule within a Month} — a section may have the same course in at most 2 consecutive weeks per month; a third consecutive week in the same month triggers a penalty.
+    \end{itemize}
+\end{itemize}
+
 \end{document}
