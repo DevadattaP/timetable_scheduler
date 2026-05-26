@@ -164,13 +164,23 @@
 
   <!-- COURSES -->
   <div id="subtab-courses" class="subtab-content">
+    <div class="card" style="margin-bottom:1.25rem">
+      <div class="section-header" style="margin-bottom:.75rem">
+        <div>
+          <h2>Areas</h2>
+          <p>Define area-specific availability and excluded dates</p>
+        </div>
+        <button class="btn btn-primary" id="add-area-btn">+ Add Area</button>
+      </div>
+      <div id="areas-list"></div>
+    </div>
     <div class="section-header">
       <div><h2>Courses</h2><p>Define courses and their session requirements</p></div>
       <button class="btn btn-primary" id="add-course-btn">+ Add Course</button>
     </div>
     <div id="courses-list"></div>
     <div class="card" style="margin-top:1.25rem">
-      <div class="card-title">⛔ Course Conflict Groups</div>
+      <div class="card-title">⛔ Course Conflict Groups (Tracks)</div>
       <p style="font-size:.82rem;color:var(--text2);margin-bottom:.85rem;line-height:1.6">
         Courses in the same group will never be scheduled at the same time slot, even across different sections.
       </p>
@@ -206,11 +216,11 @@
     <div class="card" style="margin-bottom:1rem">
       <div class="card-title">🔒 Fixed Constraints <span class="badge badge-grey section-badge">Always Applied</span></div>
       <ul class="rule-list">
-        <li><strong>H1 – Exact Fulfillment:</strong> Every section completes exactly the required number of sessions per course.</li>
-        <li><strong>H2 – One Course per Slot:</strong> Every available slot is filled by exactly one course (zero slack).</li>
-        <li><strong>H3 – No Faculty Cloning:</strong> A faculty member cannot teach two sections simultaneously.</li>
-        <li><strong>H4 – Max Daily Workload:</strong> Faculty cannot exceed their configured maximum sessions per calendar day.</li>
-        <li><strong>H5 – Daily Course Spacing:</strong> A section cannot have the same course more than once in a single day.</li>
+        <li><strong>H1 - Exact Fulfillment:</strong> Every section completes exactly the required number of sessions per course.</li>
+        <li><strong>H2 - One Course per Slot:</strong> Every available slot is filled by exactly one course (zero slack).</li>
+        <li><strong>H3 - No Faculty Cloning:</strong> A faculty member cannot teach two sections simultaneously.</li>
+        <li><strong>H4 - Max Daily Workload:</strong> Faculty cannot exceed their configured maximum sessions per calendar day.</li>
+        <li><strong>H5 - Daily Course Spacing:</strong> A section cannot have the same course more than once in a single day.</li>
       </ul>
     </div>
 
@@ -221,7 +231,7 @@
         <label class="constraint-toggle">
           <input type="checkbox" id="c-unavail" checked/>
           <div>
-            <strong>H6 – Faculty Unavailability</strong>
+            <strong>H6 - Faculty Unavailability</strong>
             <p>Block scheduling faculty on their marked unavailable dates.</p>
           </div>
         </label>
@@ -233,7 +243,7 @@
         <label class="constraint-toggle">
           <input type="checkbox" id="c-conflicts" checked/>
           <div>
-            <strong>H7 – Course Conflict Groups</strong>
+            <strong>H7 - Course Conflict Groups (Tracks)</strong>
             <p>Prevent courses in the same conflict group from running at the same time slot.</p>
           </div>
         </label>

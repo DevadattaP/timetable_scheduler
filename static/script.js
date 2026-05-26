@@ -2,6 +2,7 @@
 const KEY = {
   sections:'program_sections', courses:'program_courses',
   faculty:'program_faculty', mappings:'program_mappings',
+  areas:'program_areas',
   startDate:'program_startDate', endDate:'program_endDate',
   timetable:'program_timetable', timetableMeta:'program_timetableMeta',
   configEdit:'program_configLastEdit', conflicts: 'program_conflicts',
@@ -17,7 +18,7 @@ function touchConfig() {
 }
 
 let State = {
-  sections: [], courses: [], faculty: [], mappings: [], courseConflicts: [],
+  sections: [], courses: [], faculty: [], mappings: [], areas: [], courseConflicts: [],
   startDate:'', endDate:'',
   timetable: null, timetableMeta: null,
   constraintConfig: null,
@@ -28,6 +29,7 @@ function loadState() {
   State.courses     = get(KEY.courses)      || [];
   State.faculty     = get(KEY.faculty)      || [];
   State.mappings    = get(KEY.mappings)     || [];
+  State.areas       = get(KEY.areas)        || [];
   State.startDate   = get(KEY.startDate)    || '';
   State.endDate     = get(KEY.endDate)      || '';
   State.timetable   = get(KEY.timetable)    || null;
@@ -40,6 +42,7 @@ function saveSection()  { set(KEY.sections, State.sections); touchConfig(); }
 function saveCourse()   { set(KEY.courses,  State.courses);  touchConfig(); }
 function saveFaculty()  { set(KEY.faculty,  State.faculty);  touchConfig(); }
 function saveMapping()  { set(KEY.mappings, State.mappings); touchConfig(); }
+function saveArea()     { set(KEY.areas,    State.areas);    touchConfig(); }
 
 // TOAST
 function toast(msg, type='info') {
@@ -127,8 +130,8 @@ function saveDates() {
 // SECTIONS CRUD
 const WEEKDAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
 
-function sectionSlotRowHTML(slot, idx) {
-  return `<div class="slot-row" id="slot-row-${idx}">
+function sectionSlotRowHTML(slot, idx, rowPrefix='section') {
+  return `<div class="slot-row" id="${rowPrefix}-slot-row-${idx}">
     <div class="form-group">
       <label>Weekday</label>
       <select class="slot-weekday">${WEEKDAYS.map(w=>`<option${slot&&slot.weekday===w?' selected':''}>${w}</option>`).join('')}</select>
@@ -145,20 +148,21 @@ function sectionSlotRowHTML(slot, idx) {
       <label>Duration</label>
       <input type="number" class="slot-dur" min="0.5" step="0.5" value="${slot?slot.duration:2.5}" style="text-align:center"/>
     </div>
-    <button class="btn btn-danger btn-icon btn-sm" style="margin-bottom:0;flex-shrink:0" onclick="removeSlotRow(${idx})">✕</button>
+    <button class="btn btn-danger btn-icon btn-sm" style="margin-bottom:0;flex-shrink:0" onclick="removeSlotRow('${rowPrefix}', ${idx})">✕</button>
   </div>`;
 }
 
 let _slotCounter = 0;
-function addSlotRow(slot) {
-  const container = document.getElementById('slots-container');
+function addSlotRow(slot, containerId='slots-container', rowPrefix='section') {
+  const container = document.getElementById(containerId);
+  if(!container) return;
   const idx = _slotCounter++;
   const div = document.createElement('div');
-  div.innerHTML = sectionSlotRowHTML(slot, idx);
+  div.innerHTML = sectionSlotRowHTML(slot, idx, rowPrefix);
   container.appendChild(div.firstElementChild);
 }
-function removeSlotRow(idx) {
-  const el = document.getElementById('slot-row-'+idx);
+function removeSlotRow(rowPrefix, idx) {
+  const el = document.getElementById(`${rowPrefix}-slot-row-${idx}`);
   if(el) el.remove();
 }
 
@@ -178,14 +182,24 @@ function sectionModalBody(sec) {
     <button class="btn btn-ghost btn-sm" style="margin-top:.4rem" onclick="addSlotRow(null)">+ Add Slot</button>`;
 }
 
-function readSlots() {
-  const rows = document.querySelectorAll('.slot-row');
-  return Array.from(rows).map(row => ({
-    weekday:  row.querySelector('.slot-weekday').value,
-    fromTime: row.querySelector('.slot-from').value,
-    toTime:   row.querySelector('.slot-to').value,
-    duration: parseFloat(row.querySelector('.slot-dur').value)||2.5,
-  }));
+function readSlots(containerId='slots-container') {
+  const container = document.getElementById(containerId);
+  if (!container) return [];
+
+  const rows = container.querySelectorAll('.slot-row');
+  return Array.from(rows).map(row => {
+    const weekdayEl = row.querySelector('.slot-weekday');
+    const fromEl = row.querySelector('.slot-from');
+    const toEl = row.querySelector('.slot-to');
+    const durEl = row.querySelector('.slot-dur');
+
+    return {
+      weekday: weekdayEl ? weekdayEl.value : 'Saturday',
+      fromTime: fromEl ? fromEl.value : '09:00',
+      toTime: toEl ? toEl.value : '11:45',
+      duration: parseFloat(durEl ? durEl.value : '2.5') || 2.5,
+    };
+  });
 }
 
 function openSectionModal(mode, idx) {
@@ -200,24 +214,256 @@ function saveSectionModal(mode, editIdx) {
   clearModalError();
   const name = document.getElementById('sec-name').value.trim();
   if(!name){ showModalError('Section name is required.'); return; }
-  const slots = readSlots();
+  const slots = readSlots('slots-container');
   if(!slots.length){ showModalError('At least one slot is required.'); return; }
   const obj = {name, slots};
   const dup = State.sections.find((s,i) => s.name===name && (mode==='add'||mode==='dup'||i!==editIdx));
   if(dup){ showModalError(`Section "${name}" already exists.`); return; }
-  if(mode==='edit') State.sections[editIdx] = obj;
+  if(mode==='edit') {
+    const oldName = State.sections[editIdx].name;
+    if(oldName !== name) {
+      // Update all mappings referencing this section
+      State.mappings.forEach(m => {
+        if(m.section === oldName) m.section = name;
+      });
+      saveMapping();
+      // Update all conflict groups referencing this section
+      State.courseConflicts.forEach(group => {
+        const idx = group.sections.indexOf(oldName);
+        if(idx !== -1) group.sections[idx] = name;
+      });
+      saveConflicts();
+    }
+    State.sections[editIdx] = obj;
+  }
   else State.sections.push(obj);
-  saveSection(); renderSections();
+  saveSection(); renderSections(); renderMappings(); renderConflicts();
   closeModal(); toast(`Section "${name}" saved.`,'success');
 }
 
+
+function areaSlotRowHTML(slot, idx) {
+  return sectionSlotRowHTML(slot, idx, 'area');
+}
+
+let _areaDateCounter = 0;
+function areaExcludedDateRowHTML(val, idx) {
+  const minDate = State.startDate || '';
+  const maxDate = State.endDate || '';
+  return `<div id="area-date-row-${idx}" style="display:flex;gap:.5rem;margin-bottom:.4rem;align-items:center">
+    <input type="date" class="area-excluded-date" value="${val || ''}"${minDate ? ` min="${minDate}"` : ''}${maxDate ? ` max="${maxDate}"` : ''} style="flex:1;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:.45rem .65rem;border-radius:var(--r);font-family:var(--font-u);font-size:.85rem"/>
+    <button class="btn btn-danger btn-icon btn-sm" onclick="removeAreaDateRow(${idx})">✕</button>
+  </div>`;
+}
+
+function addAreaDateRow(val='') {
+  const container = document.getElementById('area-excluded-container');
+  if(!container) return;
+  const idx = _areaDateCounter++;
+  const div = document.createElement('div');
+  div.innerHTML = areaExcludedDateRowHTML(val, idx);
+  container.appendChild(div.firstElementChild);
+}
+
+function removeAreaDateRow(idx) {
+  const el = document.getElementById('area-date-row-'+idx);
+  if(el) el.remove();
+}
+
+function readExcludedDates(containerId='area-excluded-container') {
+  const container = document.getElementById(containerId);
+  if(!container) return [];
+  return Array.from(container.querySelectorAll('.area-excluded-date'))
+    .map(input => input.value)
+    .filter(Boolean);
+}
+
+function areaModalBody(area) {
+  _slotCounter = 0;
+  _areaDateCounter = 0;
+  const minDate = State.startDate || '';
+  const maxDate = State.endDate || '';
+  return `
+    <div class="modal-error" id="modal-err"></div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Area Name</label>
+        <input type="text" id="area-name" placeholder="e.g. Science Block" value="${area?area.name:''}"/>
+      </div>
+      <div class="form-group">
+        <label>Short Name</label>
+        <input type="text" id="area-short" placeholder="e.g. SCI" value="${area?area.shortName:''}"/>
+      </div>
+    </div>
+    <hr class="form-divider"/>
+    <div class="slots-label">Weekday Slot Pairs</div>
+    <div id="area-slots-container"></div>
+    <button class="btn btn-ghost btn-sm" style="margin-top:.4rem" onclick="addSlotRow(null, 'area-slots-container', 'area')">+ Add Slot</button>
+    <hr class="form-divider"/>
+    <div class="slots-label">Excluded Dates</div>
+    <p style="font-size:.77rem;color:var(--muted);margin:.15rem 0 .6rem;line-height:1.5">
+      Select dates within the teaching period to exclude them from this area.
+      ${minDate && maxDate ? `Allowed range: ${minDate} to ${maxDate}.` : 'Set the teaching period to constrain excluded dates.'}
+    </p>
+    <div id="area-excluded-container"></div>
+    <button class="btn btn-ghost btn-sm" style="margin-top:.4rem" onclick="addAreaDateRow('')">+ Add Date</button>`;
+}
+
+function openAreaModal(mode, idx) {
+  const area = (mode !== 'add') ? State.areas[idx] : null;
+  const title = mode === 'edit' ? 'Edit Area' : 'Add Area';
+  openModal(title, areaModalBody(area), () => saveAreaModal(mode, idx));
+  const slots = area ? area.slots : [{weekday:'Saturday',fromTime:'09:00',toTime:'11:45',duration:2.5}];
+  const excludedDates = area ? (area.excludedDates || []) : [];
+  slots.forEach(s => addSlotRow(s, 'area-slots-container', 'area'));
+  excludedDates.forEach(d => addAreaDateRow(d));
+}
+
+function saveAreaModal(mode, editIdx) {
+  clearModalError();
+  const name = document.getElementById('area-name').value.trim();
+  const shortName = document.getElementById('area-short').value.trim();
+  if(!name || !shortName){ showModalError('Area name and short name are required.'); return; }
+
+  const slots = readSlots('area-slots-container');
+  if(!slots.length){ showModalError('At least one weekday-slot pair is required.'); return; }
+
+  const excludedDates = readExcludedDates('area-excluded-container');
+  if(excludedDates.length && (!State.startDate || !State.endDate)) {
+    showModalError('Set the teaching period before adding excluded dates.');
+    return;
+  }
+  if(excludedDates.length && State.startDate && State.endDate) {
+    const start = State.startDate;
+    const end = State.endDate;
+    const outOfRange = excludedDates.find(date => date < start || date > end);
+    if(outOfRange) {
+      showModalError(`Excluded date ${outOfRange} must fall within the teaching period.`);
+      return;
+    }
+  }
+
+  const dup = State.areas.find((a, i) => a.shortName === shortName && (mode === 'add' || i !== editIdx));
+  if(dup){ showModalError(`Area short name "${shortName}" already exists.`); return; }
+
+  const obj = {name, shortName, slots, excludedDates};
+  if(mode === 'edit') {
+    const oldArea = State.areas[editIdx];
+    if(oldArea && oldArea.shortName !== shortName) {
+      State.courses.forEach(course => {
+        if(course.areaShortName === oldArea.shortName) course.areaShortName = shortName;
+      });
+      saveCourse();
+    }
+    State.areas[editIdx] = obj;
+  } else {
+    State.areas.push(obj);
+  }
+
+  saveArea();
+  renderAreas();
+  renderCourses();
+  closeModal();
+  toast(`Area "${shortName}" saved.`, 'success');
+}
+
+function deleteArea(idx) {
+  const area = State.areas[idx];
+  const linkedCourses = State.courses.filter(course => course.areaShortName === area.shortName);
+  confirm2('Delete Area', `Delete area "${area.shortName}"? ${linkedCourses.length ? `${linkedCourses.length} course(s) will be cleared.` : ''}`, () => {
+    let clearedCourses = 0;
+    State.courses.forEach(course => {
+      if(course.areaShortName === area.shortName) {
+        course.areaShortName = '';
+        clearedCourses++;
+      }
+    });
+    if(clearedCourses) saveCourse();
+
+    State.areas.splice(idx, 1);
+    saveArea();
+    renderAreas();
+    renderCourses();
+    toast(`Area "${area.shortName}" deleted.`, 'warning');
+    if(clearedCourses) toast(`${clearedCourses} course(s) were cleared from the deleted area.`, 'info');
+  });
+}
+
+function renderAreas() {
+  const el = document.getElementById('areas-list');
+  if(!el) return;
+  if(!State.areas.length) {
+    el.innerHTML = `<div class="empty-state"><div class="empty-icon">🧭</div><p>No areas added yet.</p></div>`;
+    return;
+  }
+
+  const courseCount = Object.fromEntries(State.areas.map(area => [area.shortName, 0]));
+  State.courses.forEach(course => {
+    if(course.areaShortName && courseCount[course.areaShortName] !== undefined) {
+      courseCount[course.areaShortName] += 1;
+    }
+  });
+
+  el.innerHTML = `<div class="table-wrap"><table class="data-table">
+    <thead><tr><th>Name</th><th>Short</th><th>Slot Pairs</th><th>Excluded Dates</th><th>Courses</th><th style="width:120px">Actions</th></tr></thead>
+    <tbody>${State.areas.map((area, i) => `
+      <tr>
+        <td>${area.name}</td>
+        <td><span class="badge badge-gold" style="font-family:var(--font-m)">${area.shortName}</span></td>
+        <td style="font-size:.8rem;color:var(--text2)">${(area.slots || []).map(slot => `<span class="badge badge-grey" style="margin:.1rem">${slot.weekday.slice(0,3)} ${slot.fromTime}</span>`).join(' ')}</td>
+        <td style="font-size:.8rem;color:var(--text2)">${(area.excludedDates || []).length ? (area.excludedDates || []).map(date => `<span class="badge badge-grey" style="margin:.1rem">${date}</span>`).join(' ') : '<span style="color:var(--muted)">None</span>'}</td>
+        <td><span class="badge badge-blue">${courseCount[area.shortName] || 0}</span></td>
+        <td>
+          <button class="btn btn-ghost btn-icon btn-sm" title="Edit" onclick="openAreaModal('edit', ${i})">✎</button>
+          <button class="btn btn-danger btn-icon btn-sm" title="Delete" onclick="deleteArea(${i})">✕</button>
+        </td>
+      </tr>
+    `).join('')}</tbody>
+  </table></div>`;
+}
 function deleteSection(idx) {
   const s = State.sections[idx];
   confirm2('Delete Section', `Delete section "${s.name}"? Mappings using this section will also be removed.`, () => {
+    // Delete mappings
     State.mappings = State.mappings.filter(m=>m.section!==s.name);
     saveMapping();
-    State.sections.splice(idx,1); saveSection(); renderSections(); renderMappings();
+    
+    // Handle conflict groups
+    const groupsToDelete = [];
+    let modifiedGroupsCount = 0;
+    State.courseConflicts.forEach((group, groupIdx) => {
+      const secIdx = group.sections.indexOf(s.name);
+      if(secIdx !== -1) {
+        group.sections.splice(secIdx, 1);
+        // Delete group if fewer than 2 sections remain
+        if(group.sections.length < 2) {
+          groupsToDelete.push(groupIdx);
+        } else {
+          modifiedGroupsCount++;
+        }
+      }
+    });
+    // Delete groups in reverse order to avoid index shifts
+    groupsToDelete.reverse().forEach(deleteIdx => {
+      State.courseConflicts.splice(deleteIdx, 1);
+    });
+    saveConflicts();
+    
+    // Delete section
+    State.sections.splice(idx,1); 
+    saveSection(); 
+    renderSections(); 
+    renderMappings();
+    renderConflicts();
+    
+    // Toast messages
     toast(`Section "${s.name}" deleted.`,'warning');
+    if(groupsToDelete.length > 0) {
+      toast(`${groupsToDelete.length} conflict group(s) removed (insufficient sections).`,'info');
+    }
+    if(modifiedGroupsCount > 0) {
+      toast(`${modifiedGroupsCount} conflict group(s) updated.`,'info');
+    }
   });
 }
 
@@ -245,6 +491,9 @@ document.getElementById('add-section-btn').addEventListener('click', ()=>openSec
 
 // COURSES CRUD
 function courseModalBody(c) {
+  const areaOptions = State.areas.length
+    ? [`<option value="">-- No Area --</option>`, ...State.areas.map(area => `<option value="${area.shortName}"${c&&c.areaShortName===area.shortName?' selected':''}>${area.shortName} - ${area.name}</option>`)].join('')
+    : `<option value="">-- No Areas Defined --</option>`;
   return `
     <div class="modal-error" id="modal-err"></div>
     <div class="form-row">
@@ -253,6 +502,9 @@ function courseModalBody(c) {
     </div>
     <div class="form-row">
       <div class="form-group" style="flex:2"><label>Course Title</label><input type="text" id="c-title" placeholder="e.g. Operations Research" value="${c?c.title:''}"/></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group" style="flex:2"><label>Area</label><select id="c-area">${areaOptions}</select></div>
     </div>
     <div class="form-row">
       <div class="form-group"><label>Credit</label><input type="number" id="c-credit" min="0" step="0.5" value="${c?c.credit:2}"/></div>
@@ -272,11 +524,12 @@ function saveCourseModal(mode, editIdx) {
   const code  = document.getElementById('c-code').value.trim();
   const title = document.getElementById('c-title').value.trim();
   const short = document.getElementById('c-short').value.trim();
+  const areaShortName = document.getElementById('c-area').value;
   const credit = parseFloat(document.getElementById('c-credit').value)||0;
   const dur    = parseFloat(document.getElementById('c-duration').value)||0;
   const slots  = parseInt(document.getElementById('c-slots').value)||0;
   if(!code||!title){ showModalError('Course code and title are required.'); return; }
-  const obj = {code, title, shortTitle:short, credit, duration:dur, requiredSlots:slots};
+  const obj = {code, title, shortTitle:short, areaShortName, credit, duration:dur, requiredSlots:slots};
   const dup = State.courses.find((c,i)=>c.code===code&&(mode==='add'||mode==='dup'||i!==editIdx));
   if(dup){ showModalError(`Course code "${code}" already exists.`); return; }
   if(mode==='edit') State.courses[editIdx]=obj;
@@ -301,12 +554,14 @@ function renderCourses() {
     el.innerHTML = `<div class="empty-state"><div class="empty-icon">📚</div><p>No courses added yet.</p></div>`;
     return;
   }
+  const areaMap = Object.fromEntries(State.areas.map(area => [area.shortName, area]));
   el.innerHTML = `<div class="table-wrap"><table class="data-table">
-    <thead><tr><th>Code</th><th>Title</th><th>Short</th><th>Credit</th><th>Req Slots</th><th style="width:120px">Actions</th></tr></thead>
+    <thead><tr><th>Code</th><th>Title</th><th>Short</th><th>Area</th><th>Credit</th><th>Req Slots</th><th style="width:120px">Actions</th></tr></thead>
     <tbody>${State.courses.map((c,i)=>`<tr>
       <td><span class="badge badge-blue" style="font-family:var(--font-m)">${c.code}</span></td>
       <td>${c.title}</td>
       <td><span class="badge badge-grey">${c.shortTitle||'—'}</span></td>
+      <td><span class="badge badge-gold" style="font-family:var(--font-m)">${areaMap[c.areaShortName]?areaMap[c.areaShortName].shortName:'—'}</span></td>
       <td>${c.credit}</td>
       <td><span class="badge badge-gold">${c.requiredSlots}</span></td>
       <td>
@@ -319,6 +574,7 @@ function renderCourses() {
 }
 
 document.getElementById('add-course-btn').addEventListener('click',()=>openCourseModal('add',null));
+document.getElementById('add-area-btn').addEventListener('click',()=>openAreaModal('add',null));
 
 // COURSES CONFLICTS CRUD
 function saveConflicts() { set(KEY.conflicts, State.courseConflicts); touchConfig(); }
@@ -418,8 +674,8 @@ function saveConflictModal(groupIdx) {
     showModalError('Select at least 2 courses for a conflict group.');
     return;
   }
-  if (selectedSections.length < 1) {
-    showModalError('Select at least 1 section.');
+  if (selectedSections.length < 2) {
+    showModalError('Select at least 2 sections.');
     return;
   }
 
@@ -627,6 +883,7 @@ function getConfigData() {
     startDate:  State.startDate,
     endDate:    State.endDate,
     sections:   State.sections,
+    areas:      State.areas,
     courses:    State.courses,
     faculty:    State.faculty,
     mappings:   State.mappings,
@@ -1464,6 +1721,7 @@ function init() {
   if(State.startDate) document.getElementById('start-date').value = State.startDate;
   if(State.endDate)   document.getElementById('end-date').value   = State.endDate;
   renderSections();
+  renderAreas();
   renderCourses();
   renderFaculty();
   renderMappings();
@@ -1477,7 +1735,7 @@ init();
 
 // EXPORT — Builds a styled .xlsx with one sheet per data type
 function exportToExcel() {
-  if (!State.sections.length && !State.courses.length && !State.faculty.length && !State.mappings.length) {
+  if (!State.sections.length && !State.areas.length && !State.courses.length && !State.faculty.length && !State.mappings.length) {
     toast('Nothing to export yet.', 'warning'); return;
   }
  
@@ -1518,14 +1776,36 @@ function exportToExcel() {
   setColWidths(wsSec, [14, 12, 10, 10, 14]);
   freezeHeader(wsSec);
   XLSX.utils.book_append_sheet(wb, wsSec, 'Sections');
+
+  // AREAS sheet
+  const areaHeader = ['Area Name', 'Short Name', 'Weekday', 'From Time', 'To Time', 'Duration (hrs)', 'Excluded Dates (YYYY-MM-DD)'];
+  const areaRows = [];
+  State.areas.forEach(area => {
+    const excludedDates = Array.isArray(area.excludedDates) ? area.excludedDates.join(', ') : '';
+    (area.slots || []).forEach(slot => {
+      areaRows.push([
+        area.name,
+        area.shortName,
+        slot.weekday,
+        slot.fromTime,
+        slot.toTime,
+        slot.duration,
+        excludedDates,
+      ]);
+    });
+  });
+  const wsAreas = XLSX.utils.aoa_to_sheet([areaHeader, ...areaRows]);
+  setColWidths(wsAreas, [22, 14, 12, 10, 10, 14, 28]);
+  freezeHeader(wsAreas);
+  XLSX.utils.book_append_sheet(wb, wsAreas, 'Areas');
  
   // COURSES sheet 
-  const cHeader = ['Course Code', 'Course Title', 'Short Title', 'Credit', 'Duration', 'Required Slots'];
+  const cHeader = ['Course Code', 'Course Title', 'Short Title', 'Area Short Name', 'Credit', 'Duration', 'Required Slots'];
   const cRows   = State.courses.map(c =>
-    [c.code, c.title, c.shortTitle, c.credit, c.duration, c.requiredSlots]
+    [c.code, c.title, c.shortTitle, c.areaShortName || '', c.credit, c.duration, c.requiredSlots]
   );
   const wsCourse = XLSX.utils.aoa_to_sheet([cHeader, ...cRows]);
-  setColWidths(wsCourse, [14, 36, 12, 8, 10, 14]);
+  setColWidths(wsCourse, [14, 36, 12, 14, 8, 10, 14]);
   freezeHeader(wsCourse);
   XLSX.utils.book_append_sheet(wb, wsCourse, 'Courses');
  
@@ -1678,6 +1958,43 @@ function importFromExcel(file) {
         State.sections = Object.values(secMap);
         set(KEY.sections, State.sections);
       }
+
+      // AREAS
+      const areaRows = sheetRows('Areas');
+      if (areaRows.length) {
+        const areaMap = {};
+        areaRows.forEach(r => {
+          const shortName = String(r['Short Name'] || '').trim();
+          if (!shortName) return;
+          if (!areaMap[shortName]) {
+            areaMap[shortName] = {
+              name: String(r['Area Name'] || '').trim(),
+              shortName,
+              slots: [],
+              excludedDates: [],
+            };
+          }
+          areaMap[shortName].slots.push({
+            weekday:  String(r['Weekday']        || 'Saturday').trim(),
+            fromTime: String(r['From Time']      || '09:00').trim(),
+            toTime:   String(r['To Time']        || '11:45').trim(),
+            duration: parseFloat(r['Duration (hrs)']) || 2.5,
+          });
+          const datesStr = String(r['Excluded Dates (YYYY-MM-DD)'] || '').trim();
+          if (datesStr) {
+            datesStr.split(',')
+              .map(d => d.trim())
+              .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d))
+              .forEach(date => {
+                if (!areaMap[shortName].excludedDates.includes(date)) {
+                  areaMap[shortName].excludedDates.push(date);
+                }
+              });
+          }
+        });
+        State.areas = Object.values(areaMap);
+        set(KEY.areas, State.areas);
+      }
  
       // COURSES
       const cRows = sheetRows('Courses');
@@ -1688,6 +2005,7 @@ function importFromExcel(file) {
             code:          String(r['Course Code']   || '').trim(),
             title:         String(r['Course Title']  || '').trim(),
             shortTitle:    String(r['Short Title']   || '').trim(),
+            areaShortName: String(r['Area Short Name'] || '').trim(),
             credit:        parseFloat(r['Credit'])          || 0,
             duration:      parseFloat(r['Duration'])        || 0,
             requiredSlots: parseInt(r['Required Slots'])    || 0,
@@ -1877,6 +2195,7 @@ function importFromExcel(file) {
       if (State.startDate) document.getElementById('start-date').value = State.startDate;
       if (State.endDate)   document.getElementById('end-date').value   = State.endDate;
       renderSections();
+      renderAreas();
       renderCourses();
       renderFaculty();
       renderMappings();
@@ -1885,11 +2204,12 @@ function importFromExcel(file) {
       applyConstraintConfigToUI(State.constraintConfig);
       const hasImportedConstraints = csRows.length > 0;
       const counts = [
-        State.sections.length  + ' sections',
-        State.courses.length   + ' courses',
-        State.faculty.length   + ' faculty',
-        State.mappings.length  + ' mappings',
-        State.courseConflicts.length + ' conflict groups',
+        State.sections.length? State.sections.length  + ' sections' : null,
+        State.areas.length ? State.areas.length + ' areas' : null,
+        State.courses.length ? State.courses.length   + ' courses': null,
+        State.courseConflicts.length ? State.courseConflicts.length + ' conflict groups': null,
+        State.faculty.length ? State.faculty.length   + ' faculty': null,
+        State.mappings.length ? State.mappings.length  + ' mappings': null,
         hasImportedConstraints ? 'constraint config' : null,
         State.timetable && State.timetable.length ? State.timetable.length + ' timetable sessions' : null,
       ].filter(Boolean).join(', ');

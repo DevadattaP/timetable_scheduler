@@ -231,6 +231,10 @@ header{
 .slot-row .form-group{margin-bottom:0;min-width:100px}
 .slot-row .form-group label{font-size:.7rem}
 
+#areas-list{
+  margin-top:.25rem;
+}
+
 /* TABLE */
 .data-table{width:100%;border-collapse:collapse;font-size:.83rem}
 .data-table th{
