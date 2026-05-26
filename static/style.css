@@ -222,6 +222,33 @@ header{
 .date-range-card{display:flex;gap:1.5rem;align-items:flex-end;flex-wrap:wrap}
 .date-range-card .form-group{min-width:180px;flex:0 0 auto}
 
+.mode-switch-card{
+  margin-top:1rem;
+  padding-top:1rem;
+  border-top:1px solid var(--border);
+}
+.mode-switch{
+  display:flex;
+  gap:1rem;
+  flex-wrap:wrap;
+}
+.mode-switch label{
+  display:inline-flex;
+  align-items:center;
+  gap:.45rem;
+  padding:.35rem .6rem;
+  border:1px solid var(--border);
+  border-radius:999px;
+  font-size:.82rem;
+  color:var(--text2);
+  cursor:pointer;
+  user-select:none;
+  background:var(--surface);
+}
+.mode-switch input[type="radio"]{
+  accent-color:var(--gold);
+}
+
 /* SLOT ROW */
 .slot-row{
   display:flex;gap:.5rem;align-items:flex-end;margin-bottom:.5rem;flex-wrap: wrap;

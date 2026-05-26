@@ -141,10 +141,6 @@
 
   <!-- SECTIONS -->
   <div id="subtab-sections" class="subtab-content active">
-    <div class="section-header">
-      <div><h2>Sections</h2><p>Define teaching periods and available time slots per section</p></div>
-      <button class="btn btn-primary" id="add-section-btn">+ Add Section</button>
-    </div>
     <div class="card" style="margin-bottom:1.25rem">
       <div class="card-title">📅 Teaching Period</div>
       <div class="date-range-card">
@@ -158,13 +154,22 @@
         </div>
         <button class="btn btn-ghost" onclick="saveDates()">Save Dates</button>
       </div>
+      <div class="mode-switch-card">
+        <div class="slots-label" style="margin-bottom:.35rem">Configure By</div>
+        <div class="mode-switch">
+          <label id="mode-sections-label"><input type="radio" name="config-mode" id="mode-sections" value="sections" checked/> Sections</label>
+          <label id="mode-areas-label"><input type="radio" name="config-mode" id="mode-areas" value="areas"/> Areas</label>
+        </div>
+      </div>
     </div>
-    <div id="sections-list"></div>
-  </div>
-
-  <!-- COURSES -->
-  <div id="subtab-courses" class="subtab-content">
-    <div class="card" style="margin-bottom:1.25rem">
+    <div id="sections-config-wrap">
+      <div class="section-header">
+        <div><h2>Sections</h2><p>Define teaching periods and available time slots per section</p></div>
+        <button class="btn btn-primary" id="add-section-btn">+ Add Section</button>
+      </div>
+      <div id="sections-list"></div>
+    </div>
+    <div id="areas-config-wrap" class="card" style="margin-bottom:1.25rem; margin-top:1.25rem; display:none;">
       <div class="section-header" style="margin-bottom:.75rem">
         <div>
           <h2>Areas</h2>
@@ -174,14 +179,18 @@
       </div>
       <div id="areas-list"></div>
     </div>
+  </div>
+
+  <!-- COURSES -->
+  <div id="subtab-courses" class="subtab-content">
     <div class="section-header">
       <div><h2>Courses</h2><p>Define courses and their session requirements</p></div>
       <button class="btn btn-primary" id="add-course-btn">+ Add Course</button>
     </div>
     <div id="courses-list"></div>
     <div class="card" style="margin-top:1.25rem">
-      <div class="card-title">⛔ Course Conflict Groups (Tracks)</div>
-      <p style="font-size:.82rem;color:var(--text2);margin-bottom:.85rem;line-height:1.6">
+      <div class="card-title" id="conflict-title">⛔ Course Conflict Groups (Tracks)</div>
+      <p id="conflict-desc" style="font-size:.82rem;color:var(--text2);margin-bottom:.85rem;line-height:1.6">
         Courses in the same group will never be scheduled at the same time slot, even across different sections.
       </p>
       <div id="conflicts-list"></div>
@@ -201,7 +210,7 @@
   <!-- MAPPING -->
   <div id="subtab-mapping" class="subtab-content">
     <div class="section-header">
-      <div><h2>Section-Course-Faculty Mapping</h2><p>Assign faculty to teach specific courses for specific sections</p></div>
+      <div><h2 id="mapping-title">Section-Course-Faculty Mapping</h2><p id="mapping-desc">Assign faculty to teach specific courses for specific sections</p></div>
       <button class="btn btn-primary" id="add-mapping-btn">+ Add Mapping</button>
     </div>
     <div id="mapping-list"></div>

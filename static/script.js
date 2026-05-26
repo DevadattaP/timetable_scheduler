@@ -1,8 +1,8 @@
 // STORAGE & STATE
 const KEY = {
-  sections:'program_sections', courses:'program_courses',
-  faculty:'program_faculty', mappings:'program_mappings',
-  areas:'program_areas',
+  sections:'program_sections', courses:'program_courses', faculty:'program_faculty', 
+  sectionMappings:'program_sectionMappings', areaMappings:'program_areaMappings',
+  areas:'program_areas', configMode:'program_configMode',
   startDate:'program_startDate', endDate:'program_endDate',
   timetable:'program_timetable', timetableMeta:'program_timetableMeta',
   configEdit:'program_configLastEdit', conflicts: 'program_conflicts',
@@ -18,18 +18,18 @@ function touchConfig() {
 }
 
 let State = {
-  sections: [], courses: [], faculty: [], mappings: [], areas: [], courseConflicts: [],
-  startDate:'', endDate:'',
-  timetable: null, timetableMeta: null,
-  constraintConfig: null,
+  sections: [], courses: [], faculty: [], sectionMappings: [], areaMappings: [], areas: [], courseConflicts: [],
+  configMode: 'sections', startDate:'', endDate:'', timetable: null, timetableMeta: null, constraintConfig: null,
 };
 
 function loadState() {
   State.sections    = get(KEY.sections)     || [];
   State.courses     = get(KEY.courses)      || [];
   State.faculty     = get(KEY.faculty)      || [];
-  State.mappings    = get(KEY.mappings)     || [];
+  State.sectionMappings = get(KEY.sectionMappings) || [];
+  State.areaMappings = get(KEY.areaMappings) || [];
   State.areas       = get(KEY.areas)        || [];
+  State.configMode  = get(KEY.configMode)   || 'sections';
   State.startDate   = get(KEY.startDate)    || '';
   State.endDate     = get(KEY.endDate)      || '';
   State.timetable   = get(KEY.timetable)    || null;
@@ -41,8 +41,70 @@ function loadState() {
 function saveSection()  { set(KEY.sections, State.sections); touchConfig(); }
 function saveCourse()   { set(KEY.courses,  State.courses);  touchConfig(); }
 function saveFaculty()  { set(KEY.faculty,  State.faculty);  touchConfig(); }
-function saveMapping()  { set(KEY.mappings, State.mappings); touchConfig(); }
+function saveSectionMapping()  { set(KEY.sectionMappings, State.sectionMappings); touchConfig(); }
+function saveAreaMapping()     { set(KEY.areaMappings, State.areaMappings); touchConfig(); }
 function saveArea()     { set(KEY.areas,    State.areas);    touchConfig(); }
+function saveConfigMode() { set(KEY.configMode, State.configMode); touchConfig(); }
+
+function isAreaMode() {
+  return State.configMode === 'areas';
+}
+
+function isSectionMode() {
+  return !isAreaMode();
+}
+
+function getVisibleMappings() {
+  return isAreaMode() ? State.areaMappings : State.sectionMappings;
+}
+
+function getVisibleConflictGroups() {
+  return State.courseConflicts.filter(group => isAreaMode() ? !group.sections || !group.sections.length : !!(group.sections && group.sections.length));
+}
+
+function setConfigMode(mode) {
+  if (mode !== 'sections' && mode !== 'areas') return;
+  State.configMode = mode;
+  saveConfigMode();
+  updateConfigModeUI();
+  renderSections();
+  renderAreas();
+  renderCourses();
+  renderMappings();
+  renderConflicts();
+}
+
+function updateConfigModeUI() {
+  const areaMode = isAreaMode();
+
+  const sectionsWrap = document.getElementById('sections-config-wrap');
+  const areasWrap = document.getElementById('areas-config-wrap');
+  const addSectionBtn = document.getElementById('add-section-btn');
+  const addAreaBtn = document.getElementById('add-area-btn');
+
+  const sectionsRadio = document.getElementById('mode-sections');
+  const areasRadio = document.getElementById('mode-areas');
+  if (sectionsRadio) sectionsRadio.checked = !areaMode;
+  if (areasRadio) areasRadio.checked = areaMode;
+
+  if (sectionsWrap) sectionsWrap.style.display = areaMode ? 'none' : 'block';
+  if (areasWrap) areasWrap.style.display = areaMode ? 'block' : 'none';
+  if (addSectionBtn) addSectionBtn.style.display = areaMode ? 'none' : 'inline-flex';
+  if (addAreaBtn) addAreaBtn.style.display = areaMode ? 'inline-flex' : 'none';
+
+  const mappingTitle = document.getElementById('mapping-title');
+  const mappingDesc = document.getElementById('mapping-desc');
+  const conflictTitle = document.getElementById('conflict-title');
+  const conflictDesc = document.getElementById('conflict-desc');
+  if (mappingTitle) mappingTitle.textContent = areaMode ? 'Course-Faculty Mapping' : 'Section-Course-Faculty Mapping';
+  if (mappingDesc) mappingDesc.textContent = areaMode
+    ? 'Assign faculty to teach specific courses.'
+    : 'Assign faculty to teach specific courses for specific sections.';
+  if (conflictTitle) conflictTitle.textContent = areaMode ? '⛔ Course Conflict Groups' : '⛔ Course Conflict Groups (Tracks)';
+  if (conflictDesc) conflictDesc.textContent = areaMode
+    ? 'Courses in the same group will never be scheduled at the same time slot.'
+    : 'Courses in the same group will never be scheduled at the same time slot, even across different sections.';
+}
 
 // TOAST
 function toast(msg, type='info') {
@@ -58,51 +120,62 @@ function toast(msg, type='info') {
 // TABS
 document.querySelectorAll('.tab-btn').forEach(btn => {
   btn.addEventListener('click', () => {
-    document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
-    document.querySelectorAll('.tab-content').forEach(t=>t.classList.remove('active'));
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
     btn.classList.add('active');
-    document.getElementById('tab-'+btn.dataset.tab).classList.add('active');
-    if(btn.dataset.tab==='timetable') refreshTimetableTab();
+    const target = document.getElementById(`tab-${btn.dataset.tab}`);
+    if (target) target.classList.add('active');
+
+    if (btn.dataset.tab === 'configure') {
+      const activeSubtab = document.querySelector('.subtab-btn.active') || document.querySelector('.subtab-btn');
+      if (activeSubtab) {
+        document.querySelectorAll('.subtab-content').forEach(t => t.classList.remove('active'));
+        const subtabTarget = document.getElementById(`subtab-${activeSubtab.dataset.subtab}`);
+        if (subtabTarget) subtabTarget.classList.add('active');
+      }
+      updateConfigModeUI();
+    }
   });
 });
 
 document.querySelectorAll('.subtab-btn').forEach(btn => {
   btn.addEventListener('click', () => {
-    document.querySelectorAll('.subtab-btn').forEach(b=>b.classList.remove('active'));
-    document.querySelectorAll('.subtab-content').forEach(t=>t.classList.remove('active'));
+    document.querySelectorAll('.subtab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.subtab-content').forEach(t => t.classList.remove('active'));
     btn.classList.add('active');
-    document.getElementById('subtab-'+btn.dataset.subtab).classList.add('active');
+    const target = document.getElementById(`subtab-${btn.dataset.subtab}`);
+    if (target) target.classList.add('active');
   });
 });
 
 // MODAL
 let _modalSaveFn = null;
+let _confirmFn = null;
 function openModal(title, bodyHTML, saveFn) {
   document.getElementById('modal-title').textContent = title;
   document.getElementById('modal-body').innerHTML = bodyHTML;
   _modalSaveFn = saveFn;
+  clearModalError();
   document.getElementById('modal-overlay').classList.add('open');
 }
 function closeModal() {
   document.getElementById('modal-overlay').classList.remove('open');
   _modalSaveFn = null;
-}
-function showModalError(msg) {
-  let el = document.getElementById('modal-err');
-  if(!el){ el=document.createElement('div'); el.id='modal-err'; el.className='modal-error'; document.getElementById('modal-body').prepend(el); }
-  el.textContent = msg; el.classList.add('show');
+  clearModalError();
 }
 function clearModalError() {
   const el = document.getElementById('modal-err');
-  if(el) el.classList.remove('show');
+  if (el) el.classList.remove('show');
 }
-document.getElementById('modal-save').addEventListener('click', () => { if(_modalSaveFn) _modalSaveFn(); });
-document.getElementById('modal-cancel').addEventListener('click', closeModal);
-document.getElementById('modal-close').addEventListener('click', closeModal);
-document.getElementById('modal-overlay').addEventListener('click', e => { if(e.target===e.currentTarget) closeModal(); });
+function showModalError(msg) {
+  const el = document.getElementById('modal-err');
+  if (!el) return;
+  el.textContent = msg;
+  el.classList.add('show');
+}
+document.getElementById('modal-overlay').addEventListener('click', e => { if (e.target === e.currentTarget) closeModal(); });
 
 // CONFIRM
-let _confirmFn = null;
 function confirm2(title, msg, fn) {
   document.getElementById('confirm-title').textContent = title;
   document.getElementById('confirm-msg').textContent = msg;
@@ -113,8 +186,8 @@ function closeConfirm() {
   document.getElementById('confirm-overlay').classList.remove('open');
   _confirmFn = null;
 }
-document.getElementById('confirm-ok').addEventListener('click', () => { if(_confirmFn) _confirmFn(); closeConfirm(); });
-document.getElementById('confirm-overlay').addEventListener('click', e => { if(e.target===e.currentTarget) closeConfirm(); });
+document.getElementById('confirm-ok').addEventListener('click', () => { if (_confirmFn) _confirmFn(); closeConfirm(); });
+document.getElementById('confirm-overlay').addEventListener('click', e => { if (e.target === e.currentTarget) closeConfirm(); });
 
 // DATES
 function saveDates() {
@@ -222,11 +295,11 @@ function saveSectionModal(mode, editIdx) {
   if(mode==='edit') {
     const oldName = State.sections[editIdx].name;
     if(oldName !== name) {
-      // Update all mappings referencing this section
-      State.mappings.forEach(m => {
+      // Update all section mappings referencing this section
+      State.sectionMappings.forEach(m => {
         if(m.section === oldName) m.section = name;
       });
-      saveMapping();
+      saveSectionMapping();
       // Update all conflict groups referencing this section
       State.courseConflicts.forEach(group => {
         const idx = group.sections.indexOf(oldName);
@@ -303,7 +376,7 @@ function areaModalBody(area) {
     <div class="slots-label">Excluded Dates</div>
     <p style="font-size:.77rem;color:var(--muted);margin:.15rem 0 .6rem;line-height:1.5">
       Select dates within the teaching period to exclude them from this area.
-      ${minDate && maxDate ? `Allowed range: ${minDate} to ${maxDate}.` : 'Set the teaching period to constrain excluded dates.'}
+      ${minDate && maxDate ? `<br/>Allowed range: ${minDate} to ${maxDate}.` : 'Set the teaching period to constrain excluded dates.'}
     </p>
     <div id="area-excluded-container"></div>
     <button class="btn btn-ghost btn-sm" style="margin-top:.4rem" onclick="addAreaDateRow('')">+ Add Date</button>`;
@@ -424,9 +497,9 @@ function renderAreas() {
 function deleteSection(idx) {
   const s = State.sections[idx];
   confirm2('Delete Section', `Delete section "${s.name}"? Mappings using this section will also be removed.`, () => {
-    // Delete mappings
-    State.mappings = State.mappings.filter(m=>m.section!==s.name);
-    saveMapping();
+    // Delete section mappings
+    State.sectionMappings = State.sectionMappings.filter(m=>m.section!==s.name);
+    saveSectionMapping();
     
     // Handle conflict groups
     const groupsToDelete = [];
@@ -491,9 +564,12 @@ document.getElementById('add-section-btn').addEventListener('click', ()=>openSec
 
 // COURSES CRUD
 function courseModalBody(c) {
-  const areaOptions = State.areas.length
-    ? [`<option value="">-- No Area --</option>`, ...State.areas.map(area => `<option value="${area.shortName}"${c&&c.areaShortName===area.shortName?' selected':''}>${area.shortName} - ${area.name}</option>`)].join('')
-    : `<option value="">-- No Areas Defined --</option>`;
+  const areaMode = isAreaMode();
+  const areaOptions = areaMode
+    ? (State.areas.length
+      ? [`<option value="">-- Select Area --</option>`, ...State.areas.map(area => `<option value="${area.shortName}"${c&&c.areaShortName===area.shortName?' selected':''}>${area.shortName} - ${area.name}</option>`)].join('')
+      : `<option value="">-- No Areas Defined --</option>`)
+    : '';
   return `
     <div class="modal-error" id="modal-err"></div>
     <div class="form-row">
@@ -503,9 +579,11 @@ function courseModalBody(c) {
     <div class="form-row">
       <div class="form-group" style="flex:2"><label>Course Title</label><input type="text" id="c-title" placeholder="e.g. Operations Research" value="${c?c.title:''}"/></div>
     </div>
+    ${areaMode ? `
     <div class="form-row">
       <div class="form-group" style="flex:2"><label>Area</label><select id="c-area">${areaOptions}</select></div>
-    </div>
+      <div class="form-group"><label>Max Sessions / Month</label><input type="number" id="c-max-month" min="0" step="1" value="${c&&c.maxSessionsPerMonth!=null?c.maxSessionsPerMonth:4}"/></div>
+    </div>` : ''}
     <div class="form-row">
       <div class="form-group"><label>Credit</label><input type="number" id="c-credit" min="0" step="0.5" value="${c?c.credit:2}"/></div>
       <div class="form-group"><label>Duration (hrs)</label><input type="number" id="c-duration" min="0" step="0.5" value="${c?c.duration:20}"/></div>
@@ -524,12 +602,26 @@ function saveCourseModal(mode, editIdx) {
   const code  = document.getElementById('c-code').value.trim();
   const title = document.getElementById('c-title').value.trim();
   const short = document.getElementById('c-short').value.trim();
-  const areaShortName = document.getElementById('c-area').value;
   const credit = parseFloat(document.getElementById('c-credit').value)||0;
   const dur    = parseFloat(document.getElementById('c-duration').value)||0;
   const slots  = parseInt(document.getElementById('c-slots').value)||0;
   if(!code||!title){ showModalError('Course code and title are required.'); return; }
-  const obj = {code, title, shortTitle:short, areaShortName, credit, duration:dur, requiredSlots:slots};
+  const obj = {
+    ...(mode==='edit' ? (State.courses[editIdx] || {}) : {}),
+    code,
+    title,
+    shortTitle: short,
+    credit,
+    duration: dur,
+    requiredSlots: slots,
+  };
+  if (isAreaMode()) {
+    obj.areaShortName = document.getElementById('c-area').value;
+    obj.maxSessionsPerMonth = parseInt(document.getElementById('c-max-month').value) || 0;
+  } else if (mode === 'add') {
+    delete obj.areaShortName;
+    delete obj.maxSessionsPerMonth;
+  }
   const dup = State.courses.find((c,i)=>c.code===code&&(mode==='add'||mode==='dup'||i!==editIdx));
   if(dup){ showModalError(`Course code "${code}" already exists.`); return; }
   if(mode==='edit') State.courses[editIdx]=obj;
@@ -541,8 +633,10 @@ function saveCourseModal(mode, editIdx) {
 function deleteCourse(idx) {
   const c = State.courses[idx];
   confirm2('Delete Course', `Delete "${c.code}"? Mappings using this course will also be removed.`, ()=>{
-    State.mappings = State.mappings.filter(m=>m.courseCode!==c.code);
-    saveMapping();
+    State.sectionMappings = State.sectionMappings.filter(m=>m.courseCode!==c.code);
+    State.areaMappings = State.areaMappings.filter(m=>m.courseCode!==c.code);
+    saveSectionMapping();
+    saveAreaMapping();
     State.courses.splice(idx,1); saveCourse(); renderCourses(); renderMappings();
     toast(`Course "${c.code}" deleted.`,'warning');
   });
@@ -554,16 +648,18 @@ function renderCourses() {
     el.innerHTML = `<div class="empty-state"><div class="empty-icon">📚</div><p>No courses added yet.</p></div>`;
     return;
   }
+  const areaMode = isAreaMode();
   const areaMap = Object.fromEntries(State.areas.map(area => [area.shortName, area]));
   el.innerHTML = `<div class="table-wrap"><table class="data-table">
-    <thead><tr><th>Code</th><th>Title</th><th>Short</th><th>Area</th><th>Credit</th><th>Req Slots</th><th style="width:120px">Actions</th></tr></thead>
+    <thead><tr><th>Code</th><th>Title</th><th>Short</th>${areaMode ? '<th>Area</th>' : ''}<th>Credit</th><th>Req Slots</th>${areaMode ? '<th>Max Monthly</th>' : ''}<th style="width:120px">Actions</th></tr></thead>
     <tbody>${State.courses.map((c,i)=>`<tr>
       <td><span class="badge badge-blue" style="font-family:var(--font-m)">${c.code}</span></td>
       <td>${c.title}</td>
       <td><span class="badge badge-grey">${c.shortTitle||'—'}</span></td>
-      <td><span class="badge badge-gold" style="font-family:var(--font-m)">${areaMap[c.areaShortName]?areaMap[c.areaShortName].shortName:'—'}</span></td>
+      ${areaMode ? `<td><span class="badge badge-gold" style="font-family:var(--font-m)">${areaMap[c.areaShortName]?areaMap[c.areaShortName].shortName:'—'}</span></td>` : ''}
       <td>${c.credit}</td>
       <td><span class="badge badge-gold">${c.requiredSlots}</span></td>
+      ${areaMode ? `<td><span class="badge badge-blue">${c.maxSessionsPerMonth || 0}</span></td>` : ''}
       <td>
         <button class="btn btn-ghost btn-icon btn-sm" title="Edit" onclick="openCourseModal('edit',${i})">✎</button>
         <button class="btn btn-ghost btn-icon btn-sm" title="Duplicate" onclick="openCourseModal('dup',${i})">⎘</button>
@@ -582,16 +678,22 @@ function saveConflicts() { set(KEY.conflicts, State.courseConflicts); touchConfi
 function renderConflicts() {
   const el = document.getElementById('conflicts-list');
   if (!el) return;
-  if (!State.courseConflicts.length) {
+  const areaMode = isAreaMode();
+  const visibleGroups = getVisibleConflictGroups().map(group => ({
+    group,
+    originalIndex: State.courseConflicts.indexOf(group),
+  }));
+  if (!visibleGroups.length) {
     el.innerHTML = `<div style="font-size:.82rem;color:var(--muted);padding:.4rem 0">No conflict groups defined.</div>`;
     return;
   }
   const cMap = Object.fromEntries(State.courses.map(c => [c.code, c]));
-  el.innerHTML = State.courseConflicts.map((group, i) => {
+  el.innerHTML = visibleGroups.map(({group, originalIndex}, i) => {
     const allSections = State.sections.map(s => s.name);
-    const isAllSections =
-      group.sections.length === allSections.length &&
-      group.sections.every(s => allSections.includes(s));
+    const groupSections = group.sections || [];
+    const isAllSections = !areaMode &&
+      groupSections.length === allSections.length &&
+      groupSections.every(s => allSections.includes(s));
 
     return `
       <div class="slot-row" style="align-items:center;flex-wrap:wrap;gap:.5rem;margin-bottom:.5rem">
@@ -611,18 +713,18 @@ function renderConflicts() {
         </div>
 
         <!-- SECTIONS -->
-        <div style="display:flex;flex-wrap:wrap;gap:.35rem;flex:1">
+        ${areaMode ? '' : `<div style="display:flex;flex-wrap:wrap;gap:.35rem;flex:1">
           ${
             isAllSections
               ? `<span class="badge badge-grey">All Sections</span>`
-              : group.sections.map(sec => `
+              : groupSections.map(sec => `
                   <span class="badge badge-grey">Sec ${sec}</span>
                 `).join('')
           }
-        </div>
+        </div>`}
 
-        <button class="btn btn-ghost btn-icon btn-sm" title="Edit group" onclick="openConflictModal(${i})">✎</button>
-        <button class="btn btn-danger btn-icon btn-sm" title="Delete group" onclick="deleteConflictGroup(${i})">✕</button>
+        <button class="btn btn-ghost btn-icon btn-sm" title="Edit group" onclick="openConflictModal(${originalIndex})">✎</button>
+        <button class="btn btn-danger btn-icon btn-sm" title="Delete group" onclick="deleteConflictGroup(${originalIndex})">✕</button>
       </div>`;
   }).join('');
 }
@@ -631,6 +733,7 @@ function conflictModalBody(groupIdx) {
   const group = groupIdx === null ? {courses:[], sections:[]} : (State.courseConflicts[groupIdx] || {courses:[], sections:[]});
   const courseSet = new Set(group.courses);
   const sectionSet = new Set(group.sections);
+  const areaMode = isAreaMode();
 
   if (!State.courses.length) return `<p>No courses defined yet.</p>`;
 
@@ -647,6 +750,7 @@ function conflictModalBody(groupIdx) {
       `).join('')}
     </div>
 
+    ${areaMode ? '' : `
     <p style="font-size:.82rem;color:var(--text2)">Select sections:</p>
     <div style="display:flex;flex-direction:column;gap:.3rem">
       ${State.sections.map(s => `
@@ -656,6 +760,7 @@ function conflictModalBody(groupIdx) {
         </label>
       `).join('')}
     </div>
+    `}
   `;
 }
 
@@ -669,19 +774,23 @@ function saveConflictModal(groupIdx) {
 
   const selectedCourses = [...document.querySelectorAll('.conflict-course-chk:checked')].map(el => el.value);
   const selectedSections = [...document.querySelectorAll('.conflict-section-chk:checked')].map(el => el.value);
+  const areaMode = isAreaMode();
 
   if (selectedCourses.length < 2) {
     showModalError('Select at least 2 courses for a conflict group.');
     return;
   }
-  if (selectedSections.length < 2) {
+  if (!areaMode && selectedSections.length < 2) {
     showModalError('Select at least 2 sections.');
     return;
   }
 
+  const existing = groupIdx === null ? {courses:[], sections:[]} : (State.courseConflicts[groupIdx] || {courses:[], sections:[]});
   const obj = {
+    ...existing,
     courses: selectedCourses,
-    sections: selectedSections
+    // In area mode conflict groups are defined only by courses.
+    sections: areaMode ? [] : selectedSections,
   };
 
   if (groupIdx === null) State.courseConflicts.push(obj);
@@ -760,8 +869,10 @@ function saveFacultyModal(mode, editIdx) {
 function deleteFaculty(idx) {
   const f = State.faculty[idx];
   confirm2('Delete Faculty',`Delete "${f.shortName}"? Mappings using this faculty will also be removed.`,()=>{
-    State.mappings = State.mappings.filter(m=>m.facultyShortName!==f.shortName);
-    saveMapping();
+    State.sectionMappings = State.sectionMappings.filter(m=>m.facultyShortName!==f.shortName);
+    State.areaMappings = State.areaMappings.filter(m=>m.facultyShortName!==f.shortName);
+    saveSectionMapping();
+    saveAreaMapping();
     State.faculty.splice(idx,1); saveFaculty(); renderFaculty(); renderMappings();
     toast(`Faculty "${f.shortName}" deleted.`,'warning');
   });
@@ -792,65 +903,100 @@ document.getElementById('add-faculty-btn').addEventListener('click',()=>openFacu
 
 // MAPPING CRUD
 function mappingModalBody(m) {
-  const secOpts  = State.sections.map(s=>`<option value="${s.name}"${m&&m.section===s.name?' selected':''}>${s.name}</option>`).join('');
+  const areaMode = isAreaMode();
+  const secOpts  = areaMode ? '' : State.sections.map(s=>`<option value="${s.name}"${m&&m.section===s.name?' selected':''}>${s.name}</option>`).join('');
   const cOpts    = State.courses.map(c=>`<option value="${c.code}"${m&&m.courseCode===c.code?' selected':''}>${c.code} - ${c.title}</option>`).join('');
   const fOpts    = State.faculty.map(f=>`<option value="${f.shortName}"${m&&m.facultyShortName===f.shortName?' selected':''}>${f.shortName}</option>`).join('');
   return `
     <div class="modal-error" id="modal-err"></div>
-    <div class="form-row"><div class="form-group"><label>Section</label><select id="m-sec">${secOpts||'<option disabled>No sections</option>'}</select></div></div>
+    ${areaMode ? '' : `<div class="form-row"><div class="form-group"><label>Section</label><select id="m-sec">${secOpts||'<option disabled>No sections</option>'}</select></div></div>`}
     <div class="form-row"><div class="form-group"><label>Course</label><select id="m-course">${cOpts||'<option disabled>No courses</option>'}</select></div></div>
     <div class="form-row"><div class="form-group"><label>Faculty</label><select id="m-fac">${fOpts||'<option disabled>No faculty</option>'}</select></div></div>`;
 }
 
 function openMappingModal(mode, idx) {
-  const m = (mode!=='add') ? State.mappings[idx] : null;
+  const areaMode = isAreaMode();
+  const currentMappings = areaMode ? State.areaMappings : State.sectionMappings;
+  const m = (mode!=='add') ? currentMappings[idx] : null;
   const title = mode==='edit'?'Edit Mapping':mode==='dup'?'Duplicate Mapping':'Add Mapping';
-  if(!State.sections.length||!State.courses.length||!State.faculty.length){
-    toast('Please add sections, courses, and faculty first.','warning'); return;
+  if((!isAreaMode() && !State.sections.length) || !State.courses.length || !State.faculty.length){
+    toast(isAreaMode() ? 'Please add areas, courses, and faculty first.' : 'Please add sections, courses, and faculty first.','warning'); return;
   }
   openModal(title, mappingModalBody(m), ()=>saveMappingModal(mode,idx));
 }
 
 function saveMappingModal(mode, editIdx) {
   clearModalError();
-  const sec  = document.getElementById('m-sec').value;
+  const areaMode = isAreaMode();
+  const currentMappings = areaMode ? State.areaMappings : State.sectionMappings;
+  const existing = mode==='edit' ? (currentMappings[editIdx] || {}) : {};
+  const secEl = document.getElementById('m-sec');
   const code = document.getElementById('m-course').value;
   const fac  = document.getElementById('m-fac').value;
-  if(!sec||!code||!fac){ showModalError('All fields are required.'); return; }
-  const obj = {section:sec, courseCode:code, facultyShortName:fac};
-  const dup = State.mappings.find((m,i)=>m.section===sec&&m.courseCode===code&&(mode==='add'||mode==='dup'||i!==editIdx));
-  if(dup){ showModalError(`Mapping for section ${sec} / ${code} already exists.`); return; }
-  if(mode==='edit') State.mappings[editIdx]=obj;
-  else State.mappings.push(obj);
-  saveMapping(); renderMappings();
+  const secValue = secEl ? secEl.value : '';
+  if((!areaMode && !secValue) || !code || !fac){ showModalError('All fields are required.'); return; }
+  const obj = { ...existing, courseCode: code, facultyShortName: fac };
+  if(areaMode) {
+    // In area mode mappings are course-faculty only. Ensure no section remains on the object.
+    delete obj.section;
+  } else {
+    obj.section = secValue;
+  }
+  const dup = currentMappings.find((m,i)=>
+    areaMode
+      ? m.courseCode===code && m.facultyShortName===fac && (mode==='add'||mode==='dup'||i!==editIdx)
+      : m.section===secValue && m.courseCode===code && (mode==='add'||mode==='dup'||i!==editIdx)
+  );
+  if(dup){
+    showModalError(areaMode
+      ? `Mapping for ${code} / ${fac} already exists.`
+      : `Mapping for section ${secValue} / ${code} already exists.`);
+    return;
+  }
+  if(mode==='edit') currentMappings[editIdx]=obj;
+  else currentMappings.push(obj);
+  if(areaMode) saveAreaMapping();
+  else saveSectionMapping();
+  renderMappings();
   closeModal(); toast('Mapping saved.','success');
 }
 
 function deleteMapping(idx) {
-  confirm2('Delete Mapping','Remove this section-course-faculty mapping?',()=>{
-    State.mappings.splice(idx,1); saveMapping(); renderMappings();
+  const areaMode = isAreaMode();
+  const msg = areaMode ? 'Remove this course-faculty mapping?' : 'Remove this section-course-faculty mapping?';
+  confirm2('Delete Mapping', msg, ()=>{
+    if(areaMode) {
+      State.areaMappings.splice(idx,1);
+      saveAreaMapping();
+    } else {
+      State.sectionMappings.splice(idx,1);
+      saveSectionMapping();
+    }
+    renderMappings();
     toast('Mapping removed.','warning');
   });
 }
 
 function renderMappings() {
   const el = document.getElementById('mapping-list');
-  if(!State.mappings.length){
+  const areaMode = isAreaMode();
+  const currentMappings = areaMode ? State.areaMappings : State.sectionMappings;
+  if(!currentMappings.length){
     el.innerHTML = `<div class="empty-state"><div class="empty-icon">🔗</div><p>No mappings added yet.</p></div>`;
     return;
   }
   const cMap = Object.fromEntries(State.courses.map(c=>[c.code,c]));
   const fMap = Object.fromEntries(State.faculty.map(f=>[f.shortName,f]));
   el.innerHTML = `<div class="table-wrap"><table class="data-table">
-    <thead><tr><th>Section</th><th>Course</th><th>Faculty</th><th style="width:120px">Actions</th></tr></thead>
-    <tbody>${State.mappings.map((m,i)=>`<tr>
-      <td><span class="badge badge-gold">${m.section}</span></td>
+    <thead><tr>${areaMode ? '' : '<th>Section</th>'}<th>Course</th><th>Faculty</th><th style="width:120px">Actions</th></tr></thead>
+    <tbody>${currentMappings.map((m,index)=>`<tr>
+      ${areaMode ? '' : `<td><span class="badge badge-gold">${m.section}</span></td>`}
       <td><span class="badge badge-blue" style="font-family:var(--font-m);margin-right:.35rem">${m.courseCode}</span>${cMap[m.courseCode]?cMap[m.courseCode].title:m.courseCode}</td>
       <td>${fMap[m.facultyShortName]?fMap[m.facultyShortName].fullName:m.facultyShortName}</td>
       <td>
-        <button class="btn btn-ghost btn-icon btn-sm" title="Edit" onclick="openMappingModal('edit',${i})">✎</button>
-        <button class="btn btn-ghost btn-icon btn-sm" title="Duplicate" onclick="openMappingModal('dup',${i})">⎘</button>
-        <button class="btn btn-danger btn-icon btn-sm" title="Delete" onclick="deleteMapping(${i})">✕</button>
+        <button class="btn btn-ghost btn-icon btn-sm" title="Edit" onclick="openMappingModal('edit',${index})">✎</button>
+        <button class="btn btn-ghost btn-icon btn-sm" title="Duplicate" onclick="openMappingModal('dup',${index})">⎘</button>
+        <button class="btn btn-danger btn-icon btn-sm" title="Delete" onclick="deleteMapping(${index})">✕</button>
       </td>
     </tr>`).join('')}</tbody>
   </table></div>`;
@@ -879,15 +1025,33 @@ function getCourseColor(code) {
 }
 
 function getConfigData() {
+  const areaMode = isAreaMode();
+  const courses = State.courses.map(course => {
+    const base = {
+      code: course.code,
+      title: course.title,
+      shortTitle: course.shortTitle,
+      credit: course.credit,
+      duration: course.duration,
+      requiredSlots: course.requiredSlots,
+    };
+    if (areaMode) {
+      base.areaShortName = course.areaShortName || '';
+      base.maxSessionsPerMonth = course.maxSessionsPerMonth || 0;
+    }
+    return base;
+  });
+
   return {
+    configMode: areaMode ? 'areas' : 'sections',
     startDate:  State.startDate,
     endDate:    State.endDate,
-    sections:   State.sections,
-    areas:      State.areas,
-    courses:    State.courses,
+    sections:   areaMode ? [] : State.sections,
+    areas:      areaMode ? State.areas : [],
+    courses,
     faculty:    State.faculty,
-    mappings:   State.mappings,
-    courseConflicts: State.courseConflicts,
+    mappings:   getVisibleMappings(),
+    courseConflicts: getVisibleConflictGroups(),
     constraintConfig: State.constraintConfig || defaultConstraintConfig(),
   };
 }
@@ -895,10 +1059,14 @@ function getConfigData() {
 function validateConfig() {
   const errs = [];
   if(!State.startDate||!State.endDate) errs.push('Teaching period (start/end date) not set.');
-  if(!State.sections.length) errs.push('No sections defined.');
+  if(isAreaMode()) {
+    if(!State.areas.length) errs.push('No areas defined.');
+  } else if(!State.sections.length) {
+    errs.push('No sections defined.');
+  }
   if(!State.courses.length)  errs.push('No courses defined.');
   if(!State.faculty.length)  errs.push('No faculty defined.');
-  if(!State.mappings.length) errs.push('No section-course-faculty mappings defined.');
+  if(!getVisibleMappings().length) errs.push(isAreaMode() ? 'No course-faculty mappings defined.' : 'No section-course-faculty mappings defined.');
   return errs;
 }
 
@@ -1720,22 +1888,37 @@ function init() {
   // Restore date inputs
   if(State.startDate) document.getElementById('start-date').value = State.startDate;
   if(State.endDate)   document.getElementById('end-date').value   = State.endDate;
+  document.getElementById('mode-sections').addEventListener('change', e => {
+    if (e.target.checked) setConfigMode('sections');
+  });
+  document.getElementById('mode-areas').addEventListener('change', e => {
+    if (e.target.checked) setConfigMode('areas');
+  });
   renderSections();
   renderAreas();
   renderCourses();
   renderFaculty();
   renderMappings();
   renderConflicts();
+  updateConfigModeUI();
   refreshTimetableTab();
   applyConstraintConfigToUI(State.constraintConfig);
   document.getElementById('c-consec-enabled').addEventListener('change', e => toggleConsecDetail(e.target.checked));
+
+  // Modal buttons
+  const modalClose = document.getElementById('modal-close');
+  const modalCancel = document.getElementById('modal-cancel');
+  const modalSave = document.getElementById('modal-save');
+  if (modalClose) modalClose.addEventListener('click', () => closeModal());
+  if (modalCancel) modalCancel.addEventListener('click', () => closeModal());
+  if (modalSave) modalSave.addEventListener('click', () => { if (typeof _modalSaveFn === 'function') _modalSaveFn(); });
 }
 
 init();
 
 // EXPORT — Builds a styled .xlsx with one sheet per data type
 function exportToExcel() {
-  if (!State.sections.length && !State.areas.length && !State.courses.length && !State.faculty.length && !State.mappings.length) {
+  if (!State.sections.length && !State.areas.length && !State.courses.length && !State.faculty.length && !State.areaMappings.length && !State.sectionMappings.length) {
     toast('Nothing to export yet.', 'warning'); return;
   }
  
@@ -1758,6 +1941,7 @@ function exportToExcel() {
     ['Exported at', new Date().toLocaleString()],
     ['Teaching Start', State.startDate || ''],
     ['Teaching End',   State.endDate   || ''],
+    ['Configuration Mode', State.configMode || 'sections'],
   ];
   const wsMeta = XLSX.utils.aoa_to_sheet(metaRows);
   setColWidths(wsMeta, [28, 30]);
@@ -1800,12 +1984,12 @@ function exportToExcel() {
   XLSX.utils.book_append_sheet(wb, wsAreas, 'Areas');
  
   // COURSES sheet 
-  const cHeader = ['Course Code', 'Course Title', 'Short Title', 'Area Short Name', 'Credit', 'Duration', 'Required Slots'];
+  const cHeader = ['Course Code', 'Course Title', 'Short Title', 'Area Short Name', 'Max Sessions / Month', 'Credit', 'Duration', 'Required Slots'];
   const cRows   = State.courses.map(c =>
-    [c.code, c.title, c.shortTitle, c.areaShortName || '', c.credit, c.duration, c.requiredSlots]
+    [c.code, c.title, c.shortTitle, c.areaShortName || '', c.maxSessionsPerMonth || '', c.credit, c.duration, c.requiredSlots]
   );
   const wsCourse = XLSX.utils.aoa_to_sheet([cHeader, ...cRows]);
-  setColWidths(wsCourse, [14, 36, 12, 14, 8, 10, 14]);
+  setColWidths(wsCourse, [14, 36, 12, 14, 16, 8, 10, 14]);
   freezeHeader(wsCourse);
   XLSX.utils.book_append_sheet(wb, wsCourse, 'Courses');
  
@@ -1824,11 +2008,19 @@ function exportToExcel() {
   freezeHeader(wsFac);
   XLSX.utils.book_append_sheet(wb, wsFac, 'Faculty');
  
-  // MAPPING sheet 
-  const mHeader = ['Section', 'Course Code', 'Faculty Short Name'];
-  const mRows   = State.mappings.map(m => [m.section, m.courseCode, m.facultyShortName]);
-  const wsMap   = XLSX.utils.aoa_to_sheet([mHeader, ...mRows]);
-  setColWidths(wsMap, [12, 16, 20]);
+  // MAPPING sheet (includes both section and area mappings)
+  const mHeader = ['Mode', 'Section', 'Course Code', 'Faculty Short Name'];
+  const mRows = [];
+  // Add section mappings
+  State.sectionMappings.forEach(m => {
+    mRows.push(['Section', m.section, m.courseCode, m.facultyShortName]);
+  });
+  // Add area mappings
+  State.areaMappings.forEach(m => {
+    mRows.push(['Area', '', m.courseCode, m.facultyShortName]);
+  });
+  const wsMap = XLSX.utils.aoa_to_sheet([mHeader, ...mRows]);
+  setColWidths(wsMap, [8, 12, 16, 20]);
   freezeHeader(wsMap);
   XLSX.utils.book_append_sheet(wb, wsMap, 'Mapping');
  
@@ -1936,8 +2128,13 @@ function importFromExcel(file) {
         // Row index 2 → Teaching Start, 3 → Teaching End
         const startVal = metaArr[2] && metaArr[2][1] ? String(metaArr[2][1]).trim() : '';
         const endVal   = metaArr[3] && metaArr[3][1] ? String(metaArr[3][1]).trim() : '';
+        const modeVal  = metaArr[4] && metaArr[4][1] ? String(metaArr[4][1]).trim() : '';
         if (startVal) { State.startDate = startVal; set(KEY.startDate, startVal); }
         if (endVal)   { State.endDate   = endVal;   set(KEY.endDate,   endVal);   }
+        if (modeVal === 'areas' || modeVal === 'sections') {
+          State.configMode = modeVal;
+          set(KEY.configMode, modeVal);
+        }
       }
  
       // SECTIONS 
@@ -2006,6 +2203,7 @@ function importFromExcel(file) {
             title:         String(r['Course Title']  || '').trim(),
             shortTitle:    String(r['Short Title']   || '').trim(),
             areaShortName: String(r['Area Short Name'] || '').trim(),
+            maxSessionsPerMonth: parseInt(r['Max Sessions / Month']) || 0,
             credit:        parseFloat(r['Credit'])          || 0,
             duration:      parseFloat(r['Duration'])        || 0,
             requiredSlots: parseInt(r['Required Slots'])    || 0,
@@ -2045,14 +2243,32 @@ function importFromExcel(file) {
       // MAPPING
       const mRows = sheetRows('Mapping');
       if (mRows.length) {
-        State.mappings = mRows
-          .filter(r => r['Section'] && r['Course Code'] && r['Faculty Short Name'])
-          .map(r => ({
-            section:          String(r['Section']             || '').trim(),
+        State.sectionMappings = [];
+        State.areaMappings = [];
+        
+        mRows.forEach(r => {
+          if (!r['Course Code'] || !r['Faculty Short Name']) return;
+          
+          const mode = String(r['Mode'] || '').trim().toLowerCase();
+          const mapping = {
             courseCode:       String(r['Course Code']         || '').trim(),
             facultyShortName: String(r['Faculty Short Name']  || '').trim(),
-          }));
-        set(KEY.mappings, State.mappings);
+          };
+          
+          if (mode === 'area') {
+            // Area mapping (no section)
+            State.areaMappings.push(mapping);
+          } else {
+            // Section mapping (default or explicit 'section')
+            mapping.section = String(r['Section'] || '').trim();
+            if (mapping.section) {
+              State.sectionMappings.push(mapping);
+            }
+          }
+        });
+        
+        set(KEY.sectionMappings, State.sectionMappings);
+        set(KEY.areaMappings, State.areaMappings);
       }
 
       // CONFLICTS
@@ -2064,7 +2280,7 @@ function importFromExcel(file) {
           const coursesStr  = String(r['Courses']  || '').trim();
           const sectionsStr = String(r['Sections'] || '').trim();
 
-          if (!coursesStr || !sectionsStr) return;
+          if (!coursesStr) return;
 
           const courses = coursesStr
             .split(',')
@@ -2076,7 +2292,7 @@ function importFromExcel(file) {
             .map(s => s.trim())
             .filter(Boolean);
 
-          if (courses.length >= 1 && sections.length >= 1) {
+          if (courses.length >= 2) {
             parsedGroups.push({ courses, sections });
           }
         });
@@ -2194,6 +2410,7 @@ function importFromExcel(file) {
       touchConfig();
       if (State.startDate) document.getElementById('start-date').value = State.startDate;
       if (State.endDate)   document.getElementById('end-date').value   = State.endDate;
+      updateConfigModeUI();
       renderSections();
       renderAreas();
       renderCourses();
@@ -2203,13 +2420,14 @@ function importFromExcel(file) {
       refreshTimetableTab();
       applyConstraintConfigToUI(State.constraintConfig);
       const hasImportedConstraints = csRows.length > 0;
+      const totalMappings = State.sectionMappings.length + State.areaMappings.length;
       const counts = [
         State.sections.length? State.sections.length  + ' sections' : null,
         State.areas.length ? State.areas.length + ' areas' : null,
         State.courses.length ? State.courses.length   + ' courses': null,
         State.courseConflicts.length ? State.courseConflicts.length + ' conflict groups': null,
         State.faculty.length ? State.faculty.length   + ' faculty': null,
-        State.mappings.length ? State.mappings.length  + ' mappings': null,
+        totalMappings ? totalMappings  + ' mappings': null,
         hasImportedConstraints ? 'constraint config' : null,
         State.timetable && State.timetable.length ? State.timetable.length + ' timetable sessions' : null,
       ].filter(Boolean).join(', ');
@@ -2228,7 +2446,7 @@ document.getElementById('export-btn').addEventListener('click', exportToExcel);
  
 document.getElementById('import-btn').addEventListener('click', () => {
   // Warn if data already exists
-  const hasData = State.sections.length || State.courses.length || State.faculty.length || State.mappings.length;
+  const hasData = State.sections.length || State.courses.length || State.faculty.length || State.sectionMappings.length || State.areaMappings.length || State.timetable?.length;
   if (hasData) {
     confirm2(
       'Import & Overwrite',
