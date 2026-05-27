@@ -1274,7 +1274,7 @@ function populateFilters(tt) {
       ${filterThHTML('time', 'Time', 'tt-sticky-2')}
       <th colspan="${visibleSections.length}" style="text-align:center;padding:.5rem">
         <div class="filter" id="filter-section">
-          <div class="filter-btn" onclick="toggleFilter('section')">Sections ⌄</div>
+          <div class="filter-btn" onclick="toggleFilter('section')">${isAreaMode() ? 'Areas' : 'Sections'} ⌄</div>
           <div class="filter-dropdown">
             <input type="text" placeholder="Search..." oninput="filterSearch('section', this.value)">
             <label><input type="checkbox" ${ActiveFilters.section.size === allSections.length ? 'checked' : ''} onchange="toggleAll('section', this)"> All</label>
@@ -1367,7 +1367,10 @@ function renderTimetableRows() {
     if (!dateGroups.has(dk)) dateGroups.set(dk, { date: r.date, day: r.day, times: new Map() });
     const tm = dateGroups.get(dk).times;
     if (!tm.has(r.timeLabel)) tm.set(r.timeLabel, {});
-    tm.get(r.timeLabel)[r.section] = r;
+    // Allow multiple sessions per section cell (area-mode may produce parallel sessions)
+    const cellMap = tm.get(r.timeLabel);
+    if (!cellMap[r.section]) cellMap[r.section] = [];
+    cellMap[r.section].push(r);
   });
 
   // 5. Remove time slots where ALL visible sections are empty
@@ -1394,12 +1397,16 @@ function renderTimetableRows() {
         <td rowspan="${rowspan}" class="tt-sticky-1" style="vertical-align:middle;border-right:1px solid var(--border);color:var(--text2);font-size:.82rem">${day}</td>` : '';
 
       const sectionCells = sections.map(sec => {
-        const r = sessMap[sec];
-        if (!r) return `<td style="color:var(--muted);text-align:center;font-size:.8rem">—</td>`;
-        const col = getCourseColor(r.courseCode);
+        const cell = sessMap[sec];
+        if (!cell) return `<td style="color:var(--muted);text-align:center;font-size:.8rem">—</td>`;
+        // cell is an array of one or more sessions
+        const first = cell[0];
+        const col = getCourseColor(first.courseCode);
+        const courseLabel = cell.map(x => x.courseShort || x.courseCode).join(' / ');
+        const facultyLabel = cell.map(x => x.facultyShort || x.faculty).join(' / ');
         return `<td style="text-align:center">
-          <span class="course-chip" style="background:${col}22;color:${col};border:1px solid ${col}44">${r.courseShort||r.courseCode}</span>
-          <span style="color:var(--text2);font-size:.75rem;display:block;margin-top:.2rem">${r.facultyShort||r.faculty}</span>
+          <span class="course-chip" style="background:${col}22;color:${col};border:1px solid ${col}44">${courseLabel}</span>
+          <span style="color:var(--text2);font-size:.75rem;display:block;margin-top:.2rem">${facultyLabel}</span>
         </td>`;
       });
 
@@ -1771,7 +1778,7 @@ function renderVerification(data) {
         <table class="data-table">
           <thead><tr><th>Section</th><th>Course</th><th>Window Start</th><th>Window End</th><th>Length</th></tr></thead>
           <tbody>${data.consecutiveViolations.map(r=>`<tr>
-            <td><span class="badge badge-gold">${r.section}</span></td>
+            <td><span class="badge badge-gold">${r.section || 'All Areas'}</span></td>
             <td><span class="badge badge-blue" style="font-family:var(--font-m)">${r.course}</span></td>
             <td style="font-family:var(--font-m);font-size:.8rem">${r.periodStart}</td>
             <td style="font-family:var(--font-m);font-size:.8rem">${r.periodEnd}</td>
@@ -1799,7 +1806,7 @@ function renderVerification(data) {
   sections.forEach((s,i)=>{
     const btn=document.createElement('button');
     btn.className='section-filter-btn'+(i===0?' active':'');
-    btn.textContent='Section '+s;
+    btn.textContent=isAreaMode() ? 'Area ' + s : 'Section ' + s;
     btn.addEventListener('click',()=>{
       hmbtnEl.querySelectorAll('.section-filter-btn').forEach(b=>b.classList.remove('active'));
       btn.classList.add('active');
@@ -1811,9 +1818,13 @@ function renderVerification(data) {
 }
 
 function renderHeatmap(dist, container) {
-  const {weeks, courses, data: mat} = dist;
+  const {weeks, weekLabels, courses, data: mat} = dist;
+  // Backward compatible: older payloads only contain numeric ISO week numbers.
+  const headers = (Array.isArray(weekLabels) && weekLabels.length === weeks.length)
+    ? weekLabels
+    : weeks.map(w => `W${w}`);
   let t = `<div style="overflow-x:auto"><table class="heatmap-table">
-    <thead><tr><th class="hm-sticky-col hm-sticky-head">Course \\ Week</th>${weeks.map(w=>`<th>W${w}</th>`).join('')}</tr></thead>
+    <thead><tr><th class="hm-sticky-col hm-sticky-head">Course \\ Week</th>${headers.map(w=>`<th>${w}</th>`).join('')}</tr></thead>
     <tbody>${courses.map((c,ci)=>`<tr>
       <td class="hm-sticky-col">
         <span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${getCourseColor(c)};margin-right:.35rem;vertical-align:middle"></span>${c}
@@ -1832,7 +1843,7 @@ function renderHeatmap(dist, container) {
     · = no session
   </p>
   <p style="font-size:.73rem;color:var(--muted);margin-top:.2rem">
-    NOTE: Weeks are numbered relative to the calendar year, not the course start date.
+    NOTE: Weeks are shown in ISO year-week format (YYYY-Www) for chronological clarity across year boundaries.
   </p>
   `;
   container.innerHTML = t;
@@ -1947,49 +1958,54 @@ function exportToExcel() {
   setColWidths(wsMeta, [28, 30]);
   XLSX.utils.book_append_sheet(wb, wsMeta, 'Meta');
  
-  // SECTIONS sheet 
-  // Flatten: one row per slot (section repeated)
-  const secHeader = ['Section Name', 'Weekday', 'From Time', 'To Time', 'Duration (hrs)'];
-  const secRows   = [];
-  State.sections.forEach(s =>
-    s.slots.forEach(sl =>
-      secRows.push([s.name, sl.weekday, sl.fromTime, sl.toTime, sl.duration])
-    )
-  );
-  const wsSec = XLSX.utils.aoa_to_sheet([secHeader, ...secRows]);
-  setColWidths(wsSec, [14, 12, 10, 10, 14]);
-  freezeHeader(wsSec);
-  XLSX.utils.book_append_sheet(wb, wsSec, 'Sections');
+  const areaMode = isAreaMode();
 
-  // AREAS sheet
-  const areaHeader = ['Area Name', 'Short Name', 'Weekday', 'From Time', 'To Time', 'Duration (hrs)', 'Excluded Dates (YYYY-MM-DD)'];
-  const areaRows = [];
-  State.areas.forEach(area => {
-    const excludedDates = Array.isArray(area.excludedDates) ? area.excludedDates.join(', ') : '';
-    (area.slots || []).forEach(slot => {
-      areaRows.push([
-        area.name,
-        area.shortName,
-        slot.weekday,
-        slot.fromTime,
-        slot.toTime,
-        slot.duration,
-        excludedDates,
-      ]);
+  // SECTIONS / AREAS sheet (mode-specific)
+  if (!areaMode) {
+    const secHeader = ['Section Name', 'Weekday', 'From Time', 'To Time', 'Duration (hrs)'];
+    const secRows   = [];
+    State.sections.forEach(s =>
+      s.slots.forEach(sl =>
+        secRows.push([s.name, sl.weekday, sl.fromTime, sl.toTime, sl.duration])
+      )
+    );
+    const wsSec = XLSX.utils.aoa_to_sheet([secHeader, ...secRows]);
+    setColWidths(wsSec, [14, 12, 10, 10, 14]);
+    freezeHeader(wsSec);
+    XLSX.utils.book_append_sheet(wb, wsSec, 'Sections');
+  } else {
+    const areaHeader = ['Area Name', 'Short Name', 'Weekday', 'From Time', 'To Time', 'Duration (hrs)', 'Excluded Dates (YYYY-MM-DD)'];
+    const areaRows = [];
+    State.areas.forEach(area => {
+      const excludedDates = Array.isArray(area.excludedDates) ? area.excludedDates.join(', ') : '';
+      (area.slots || []).forEach(slot => {
+        areaRows.push([
+          area.name,
+          area.shortName,
+          slot.weekday,
+          slot.fromTime,
+          slot.toTime,
+          slot.duration,
+          excludedDates,
+        ]);
+      });
     });
-  });
-  const wsAreas = XLSX.utils.aoa_to_sheet([areaHeader, ...areaRows]);
-  setColWidths(wsAreas, [22, 14, 12, 10, 10, 14, 28]);
-  freezeHeader(wsAreas);
-  XLSX.utils.book_append_sheet(wb, wsAreas, 'Areas');
+    const wsAreas = XLSX.utils.aoa_to_sheet([areaHeader, ...areaRows]);
+    setColWidths(wsAreas, [22, 14, 12, 10, 10, 14, 28]);
+    freezeHeader(wsAreas);
+    XLSX.utils.book_append_sheet(wb, wsAreas, 'Areas');
+  }
  
-  // COURSES sheet 
-  const cHeader = ['Course Code', 'Course Title', 'Short Title', 'Area Short Name', 'Max Sessions / Month', 'Credit', 'Duration', 'Required Slots'];
-  const cRows   = State.courses.map(c =>
-    [c.code, c.title, c.shortTitle, c.areaShortName || '', c.maxSessionsPerMonth || '', c.credit, c.duration, c.requiredSlots]
+  // COURSES sheet
+  const cHeader = areaMode
+    ? ['Course Code', 'Course Title', 'Short Title', 'Area Short Name', 'Max Sessions / Month', 'Credit', 'Duration', 'Required Slots']
+    : ['Course Code', 'Course Title', 'Short Title', 'Credit', 'Duration', 'Required Slots'];
+  const cRows   = State.courses.map(c => areaMode
+    ? [c.code, c.title, c.shortTitle, c.areaShortName || '', c.maxSessionsPerMonth || '', c.credit, c.duration, c.requiredSlots]
+    : [c.code, c.title, c.shortTitle, c.credit, c.duration, c.requiredSlots]
   );
   const wsCourse = XLSX.utils.aoa_to_sheet([cHeader, ...cRows]);
-  setColWidths(wsCourse, [14, 36, 12, 14, 16, 8, 10, 14]);
+  setColWidths(wsCourse, areaMode ? [14, 36, 12, 14, 16, 8, 10, 14] : [14, 36, 12, 8, 10, 14]);
   freezeHeader(wsCourse);
   XLSX.utils.book_append_sheet(wb, wsCourse, 'Courses');
  
@@ -2008,37 +2024,32 @@ function exportToExcel() {
   freezeHeader(wsFac);
   XLSX.utils.book_append_sheet(wb, wsFac, 'Faculty');
  
-  // MAPPING sheet (includes both section and area mappings)
-  const mHeader = ['Mode', 'Section', 'Course Code', 'Faculty Short Name'];
-  const mRows = [];
-  // Add section mappings
-  State.sectionMappings.forEach(m => {
-    mRows.push(['Section', m.section, m.courseCode, m.facultyShortName]);
-  });
-  // Add area mappings
-  State.areaMappings.forEach(m => {
-    mRows.push(['Area', '', m.courseCode, m.facultyShortName]);
-  });
+  // MAPPING sheet (mode-specific)
+  const mHeader = areaMode
+    ? ['Course Code', 'Faculty Short Name']
+    : ['Section', 'Course Code', 'Faculty Short Name'];
+  const mRows = areaMode
+    ? State.areaMappings.map(m => [m.courseCode, m.facultyShortName])
+    : State.sectionMappings.map(m => [m.section, m.courseCode, m.facultyShortName]);
   const wsMap = XLSX.utils.aoa_to_sheet([mHeader, ...mRows]);
-  setColWidths(wsMap, [8, 12, 16, 20]);
+  setColWidths(wsMap, areaMode ? [16, 20] : [12, 16, 20]);
   freezeHeader(wsMap);
   XLSX.utils.book_append_sheet(wb, wsMap, 'Mapping');
  
   // CONFLICTS sheet
   if (State.courseConflicts.length) {
-    const cfHeader = ['Group', 'Courses', 'Sections'];
+    const cfHeader = areaMode ? ['Group', 'Courses'] : ['Group', 'Courses', 'Sections'];
     const cfRows   = [];
 
     State.courseConflicts.forEach((group, i) => {
-      cfRows.push([
-        i + 1,
-        group.courses.join(', '),
-        group.sections.join(', ')
-      ]);
+      cfRows.push(areaMode
+        ? [i + 1, group.courses.join(', ')]
+        : [i + 1, group.courses.join(', '), group.sections.join(', ')]
+      );
     });
 
     const wsCf = XLSX.utils.aoa_to_sheet([cfHeader, ...cfRows]);
-    setColWidths(wsCf, [8, 30, 20]);
+    setColWidths(wsCf, areaMode ? [8, 30] : [8, 30, 20]);
     freezeHeader(wsCf);
     XLSX.utils.book_append_sheet(wb, wsCf, 'Conflicts');
   }
@@ -2070,7 +2081,10 @@ function exportToExcel() {
     tt.forEach(r => {
       const key = `${r.date}||${r.day}||${r.fromTime}||${r.toTime}`;
       if (!pivotMap.has(key)) pivotMap.set(key, { date: r.date, day: r.day, fromTime: r.fromTime, toTime: r.toTime, cells: {} });
-      pivotMap.get(key).cells[r.section] = `${r.courseShort || r.courseCode} (${r.facultyShort || ''})`;
+      const cellStr = `${r.courseShort || r.courseCode} (${r.facultyShort || ''})`;
+      const entry = pivotMap.get(key);
+      if (!entry.cells[r.section]) entry.cells[r.section] = [];
+      entry.cells[r.section].push(cellStr);
     });
 
     // Sort pivot rows by date then fromTime
@@ -2080,7 +2094,7 @@ function exportToExcel() {
 
     const ttHeader = ['Date', 'Day', 'From Time', 'To Time', ...ttSections];
     const ttRows   = pivotRows.map(p =>
-      [p.date, p.day, p.fromTime, p.toTime, ...ttSections.map(s => p.cells[s] || '')]
+      [p.date, p.day, p.fromTime, p.toTime, ...ttSections.map(s => p.cells[s] ? p.cells[s].join(' / ') : '')]
     );
 
     const wsTT = XLSX.utils.aoa_to_sheet([ttHeader, ...ttRows]);
@@ -2122,13 +2136,14 @@ function importFromExcel(file) {
       }
  
       // META
+      let modeVal = '';
       const metaSheet = wb.Sheets['Meta'];
       if (metaSheet) {
         const metaArr = XLSX.utils.sheet_to_json(metaSheet, { header: 1, defval: '' });
         // Row index 2 → Teaching Start, 3 → Teaching End
         const startVal = metaArr[2] && metaArr[2][1] ? String(metaArr[2][1]).trim() : '';
         const endVal   = metaArr[3] && metaArr[3][1] ? String(metaArr[3][1]).trim() : '';
-        const modeVal  = metaArr[4] && metaArr[4][1] ? String(metaArr[4][1]).trim() : '';
+        modeVal = metaArr[4] && metaArr[4][1] ? String(metaArr[4][1]).trim() : '';
         if (startVal) { State.startDate = startVal; set(KEY.startDate, startVal); }
         if (endVal)   { State.endDate   = endVal;   set(KEY.endDate,   endVal);   }
         if (modeVal === 'areas' || modeVal === 'sections') {
@@ -2137,60 +2152,69 @@ function importFromExcel(file) {
         }
       }
  
-      // SECTIONS 
-      const secRows = sheetRows('Sections');
-      if (secRows.length) {
-        const secMap = {};
-        secRows.forEach(r => {
-          const name = String(r['Section Name'] || '').trim();
-          if (!name) return;
-          if (!secMap[name]) secMap[name] = { name, slots: [] };
-          secMap[name].slots.push({
-            weekday:  String(r['Weekday']        || 'Saturday').trim(),
-            fromTime: String(r['From Time']      || '09:00').trim(),
-            toTime:   String(r['To Time']        || '11:45').trim(),
-            duration: parseFloat(r['Duration (hrs)']) || 2.5,
-          });
-        });
-        State.sections = Object.values(secMap);
-        set(KEY.sections, State.sections);
-      }
+      const fileMode = modeVal === 'areas' || modeVal === 'sections'
+        ? modeVal
+        : (wb.SheetNames.includes('Areas') && !wb.SheetNames.includes('Sections') ? 'areas' : 'sections');
 
-      // AREAS
-      const areaRows = sheetRows('Areas');
-      if (areaRows.length) {
-        const areaMap = {};
-        areaRows.forEach(r => {
-          const shortName = String(r['Short Name'] || '').trim();
-          if (!shortName) return;
-          if (!areaMap[shortName]) {
-            areaMap[shortName] = {
-              name: String(r['Area Name'] || '').trim(),
-              shortName,
-              slots: [],
-              excludedDates: [],
-            };
-          }
-          areaMap[shortName].slots.push({
-            weekday:  String(r['Weekday']        || 'Saturday').trim(),
-            fromTime: String(r['From Time']      || '09:00').trim(),
-            toTime:   String(r['To Time']        || '11:45').trim(),
-            duration: parseFloat(r['Duration (hrs)']) || 2.5,
+      // SECTIONS / AREAS (mode-specific)
+      if (fileMode === 'sections') {
+        const secRows = sheetRows('Sections');
+        if (secRows.length) {
+          const secMap = {};
+          secRows.forEach(r => {
+            const name = String(r['Section Name'] || '').trim();
+            if (!name) return;
+            if (!secMap[name]) secMap[name] = { name, slots: [] };
+            secMap[name].slots.push({
+              weekday:  String(r['Weekday']        || 'Saturday').trim(),
+              fromTime: String(r['From Time']      || '09:00').trim(),
+              toTime:   String(r['To Time']        || '11:45').trim(),
+              duration: parseFloat(r['Duration (hrs)']) || 2.5,
+            });
           });
-          const datesStr = String(r['Excluded Dates (YYYY-MM-DD)'] || '').trim();
-          if (datesStr) {
-            datesStr.split(',')
-              .map(d => d.trim())
-              .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d))
-              .forEach(date => {
-                if (!areaMap[shortName].excludedDates.includes(date)) {
-                  areaMap[shortName].excludedDates.push(date);
-                }
-              });
-          }
-        });
-        State.areas = Object.values(areaMap);
-        set(KEY.areas, State.areas);
+          State.sections = Object.values(secMap);
+          set(KEY.sections, State.sections);
+        }
+        State.areas = [];
+        remove(KEY.areas);
+      } else {
+        const areaRows = sheetRows('Areas');
+        if (areaRows.length) {
+          const areaMap = {};
+          areaRows.forEach(r => {
+            const shortName = String(r['Short Name'] || '').trim();
+            if (!shortName) return;
+            if (!areaMap[shortName]) {
+              areaMap[shortName] = {
+                name: String(r['Area Name'] || '').trim(),
+                shortName,
+                slots: [],
+                excludedDates: [],
+              };
+            }
+            areaMap[shortName].slots.push({
+              weekday:  String(r['Weekday']        || 'Saturday').trim(),
+              fromTime: String(r['From Time']      || '09:00').trim(),
+              toTime:   String(r['To Time']        || '11:45').trim(),
+              duration: parseFloat(r['Duration (hrs)']) || 2.5,
+            });
+            const datesStr = String(r['Excluded Dates (YYYY-MM-DD)'] || '').trim();
+            if (datesStr) {
+              datesStr.split(',')
+                .map(d => d.trim())
+                .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d))
+                .forEach(date => {
+                  if (!areaMap[shortName].excludedDates.includes(date)) {
+                    areaMap[shortName].excludedDates.push(date);
+                  }
+                });
+            }
+          });
+          State.areas = Object.values(areaMap);
+          set(KEY.areas, State.areas);
+        }
+        State.sections = [];
+        remove(KEY.sections);
       }
  
       // COURSES
@@ -2198,16 +2222,21 @@ function importFromExcel(file) {
       if (cRows.length) {
         State.courses = cRows
           .filter(r => r['Course Code'])
-          .map(r => ({
-            code:          String(r['Course Code']   || '').trim(),
-            title:         String(r['Course Title']  || '').trim(),
-            shortTitle:    String(r['Short Title']   || '').trim(),
-            areaShortName: String(r['Area Short Name'] || '').trim(),
-            maxSessionsPerMonth: parseInt(r['Max Sessions / Month']) || 0,
-            credit:        parseFloat(r['Credit'])          || 0,
-            duration:      parseFloat(r['Duration'])        || 0,
-            requiredSlots: parseInt(r['Required Slots'])    || 0,
-          }));
+          .map(r => {
+            const base = {
+              code: String(r['Course Code'] || '').trim(),
+              title: String(r['Course Title'] || '').trim(),
+              shortTitle: String(r['Short Title'] || '').trim(),
+              credit: parseFloat(r['Credit']) || 0,
+              duration: parseFloat(r['Duration']) || 0,
+              requiredSlots: parseInt(r['Required Slots']) || 0,
+            };
+            if (fileMode === 'areas') {
+              base.areaShortName = String(r['Area Short Name'] || '').trim();
+              base.maxSessionsPerMonth = parseInt(r['Max Sessions / Month']) || 0;
+            }
+            return base;
+          });
         set(KEY.courses, State.courses);
       }
  
@@ -2248,22 +2277,17 @@ function importFromExcel(file) {
         
         mRows.forEach(r => {
           if (!r['Course Code'] || !r['Faculty Short Name']) return;
-          
-          const mode = String(r['Mode'] || '').trim().toLowerCase();
+
           const mapping = {
-            courseCode:       String(r['Course Code']         || '').trim(),
-            facultyShortName: String(r['Faculty Short Name']  || '').trim(),
+            courseCode: String(r['Course Code'] || '').trim(),
+            facultyShortName: String(r['Faculty Short Name'] || '').trim(),
           };
-          
-          if (mode === 'area') {
-            // Area mapping (no section)
+
+          if (fileMode === 'areas') {
             State.areaMappings.push(mapping);
           } else {
-            // Section mapping (default or explicit 'section')
             mapping.section = String(r['Section'] || '').trim();
-            if (mapping.section) {
-              State.sectionMappings.push(mapping);
-            }
+            if (mapping.section) State.sectionMappings.push(mapping);
           }
         });
         
@@ -2278,7 +2302,7 @@ function importFromExcel(file) {
 
         cfRows.forEach(r => {
           const coursesStr  = String(r['Courses']  || '').trim();
-          const sectionsStr = String(r['Sections'] || '').trim();
+          const sectionsStr = fileMode === 'sections' ? String(r['Sections'] || '').trim() : '';
 
           if (!coursesStr) return;
 
@@ -2376,22 +2400,26 @@ function importFromExcel(file) {
 
             const section = col.trim();
 
-            // Parse "SHORTNAME (FACULTYSHORT)" — faculty short may contain spaces
-            const match = cellVal.match(/^(.+?)\s*\((.+)\)$/);
-            const rawShort  = match ? match[1].trim() : cellVal;
-            const facShort  = match ? match[2].trim() : '';
+            // Support multiple entries per cell separated by ' / '
+            const parts = cellVal.split(/\s*\/\s*/).map(s => s.trim()).filter(Boolean);
+            parts.forEach(part => {
+              // Parse "SHORTNAME (FACULTYSHORT)" — faculty short may contain spaces
+              const match = part.match(/^(.+?)\s*\((.+)\)$/);
+              const rawShort  = match ? match[1].trim() : part;
+              const facShort  = match ? match[2].trim() : '';
 
-            // Resolve course
-            const course     = courseByShort[rawShort] || courseByCode[rawShort] || null;
-            const courseCode  = course ? course.code       : rawShort;
-            const courseTitle = course ? course.title      : rawShort;
-            const courseShort = course ? course.shortTitle : rawShort;
+              // Resolve course
+              const course     = courseByShort[rawShort] || courseByCode[rawShort] || null;
+              const courseCode  = course ? course.code       : rawShort;
+              const courseTitle = course ? course.title      : rawShort;
+              const courseShort = course ? course.shortTitle : rawShort;
 
-            // Resolve faculty
-            const facObj  = facultyByShort[facShort] || null;
-            const faculty = facObj ? facObj.fullName : facShort;
+              // Resolve faculty
+              const facObj  = facultyByShort[facShort] || null;
+              const faculty = facObj ? facObj.fullName : facShort;
 
-            timetable.push({ date, day, fromTime, toTime, timeLabel, section, courseCode, courseTitle, courseShort, facultyShort: facShort, faculty });
+              timetable.push({ date, day, fromTime, toTime, timeLabel, section, courseCode, courseTitle, courseShort, facultyShort: facShort, faculty });
+            });
           });
         });
 

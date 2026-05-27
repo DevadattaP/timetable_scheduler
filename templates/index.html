@@ -49,20 +49,30 @@
         <div class="card-title">🎓 Objective</div>
         <p style="font-size:.88rem;color:var(--text2);line-height:1.7">
           This system automates the creation of a feasible and optimized class timetable
-          for any academic programme. It accommodates multiple sections, faculty
-          constraints, and calendar availability — while minimizing pedagogical disruptions.
+          for any academic programme. It supports two planning modes: sections-based
+          scheduling for fixed section timetables, and areas-based scheduling for
+          parallel course delivery inside each area, while respecting faculty constraints
+          and calendar availability.
         </p>
       </div>
       <div class="card">
         <div class="card-title">⚙ How It Works</div>
         <ul class="rule-list">
-          <li>Configure sections, courses, faculty, mappings, and constraints in the Configure tab.</li>
-          <li>You can import configuration from an Excel file. <a href="{{ url_for('static', filename='Timetable_Config_LP.xlsx') }}" download>Download Template</a></li>
+          <li>Choose either Sections mode or Areas mode, then configure the matching buckets, courses, faculty, mappings, and constraints in the Configure tab.</li>
+          <li>You can import configuration from an Excel file. <a href="{{ url_for('static', filename='Sections_timetable_config.xlsx') }}" download>Sections Template</a> / <a href="{{ url_for('static', filename='Areas_timetable_config.xlsx') }}" download>Areas Template</a></li>
           <li>Click <strong>Generate Timetable</strong> to send the configuration to the LP solver.</li>
           <li>The solver always tries to satisfy all enabled <strong>Hard Constraints</strong>.</li>
           <li>If the Consecutive Sessions Rule is enabled, the solver minimizes consecutive-period violations using a <strong>Soft Penalty Objective</strong>.</li>
           <li>The generated timetable can be verified against all configured constraints.</li>
           <li>You can export both configuration and timetable to Excel for backup or offline editing.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <div class="card-title">🧭 Modes</div>
+        <ul class="rule-list">
+          <li><strong>Sections mode:</strong> Each section gets its own timetable and every available section slot is filled by exactly one class.</li>
+          <li><strong>Areas mode:</strong> Each area can host multiple sessions in the same slot when the constraints allow it, so parallel delivery is possible inside that area.</li>
+          <li><strong>Mappings:</strong> Sections mode uses section-course-faculty mappings, while Areas mode maps course to faculty only.</li>
         </ul>
       </div>
     </div>
@@ -83,7 +93,7 @@
         <ul class="rule-list">
           <li>
             <strong>Configurable Consecutive Limit:</strong>
-            Restrict how many consecutive periods the same course may appear for a section.
+            Restrict how many consecutive periods the same course may appear (for a section if sections mode is enabled).
           </li>
 
           <li>
@@ -108,7 +118,7 @@
             <strong>Violation Definition:</strong>
             A penalty is added whenever the same course appears in
             <strong>(max consecutive + 1)</strong>
-            consecutive eligible periods for the same section.
+            consecutive eligible periods (for the same section if sections mode is enabled).
           </li>
 
           <li>
