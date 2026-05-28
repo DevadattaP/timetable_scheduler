@@ -6,9 +6,9 @@ MATHEMATICAL FORMULATION SUMMARY
 ----------------------------------
 
 SETS:
-  S   = set of sections (configured by user, e.g. {A, B, C, D, E, F})
+  B = set of buckets (section names in Sections mode, area.shortName in Areas mode)
   C   = set of course codes
-  T_s = {0, …, n_s-1}  — ordered slot indices for section s
+  T_b = {0, …, n_b-1}  — ordered slot indices for bucket b
   F   = set of faculty short names
   PK  = set of period keys uniquely identifying each scheduling period:
         period_unit = "weeks" → pk = ISO year-week integer:
@@ -17,14 +17,14 @@ SETS:
         period_unit = "days"  → pk = date.toordinal()
   G   = set of course conflict groups               [optional — H7]
   C_g = set of course codes in conflict group g
-  S_g = set of sections to which conflict group g applies
+  B_g = set of buckets to which conflict group g applies
 
 PARAMETERS:
-  req[s,c]   = required number of sessions for (section s, course c)
-  fac[s,c]   = faculty member assigned to teach course c to section s
-  date[s,t]  = calendar date of slot t for section s
-  pk[s,t]    = period key of slot t  (see PK definition above)
-  bk[s,t]    = boundary key of slot t; controls where the consecutive counter resets:
+  req[b,c]   = required number of sessions for (bucket b, course c) (in Areas mode req is aggregated / derived per course-bucket semantics)
+  fac[b,c]   = faculty member assigned to teach course c in bucket b
+  date[b,t]  = calendar date of slot t for bucket b
+  pk[b,t]    = period key of slot t  (see PK definition above)
+  bk[b,t]    = boundary key of slot t; controls where the consecutive counter resets:
                  reset_boundary = "month" → bk = date.year × 100 + date.month
                  reset_boundary = "none"  → bk = 0  (no reset, sequence is continuous)
   m_f        = maximum sessions faculty f may teach per calendar day
@@ -33,56 +33,60 @@ PARAMETERS:
                A window of (M+1) consecutive same-boundary periods triggers a penalty.
 
 DECISION VARIABLES:
-  x[s,c,t]   ∈ {0,1}  — 1 if section s is taught course c at slot t
-  y[s,c,pk]  ∈ {0,1}  — 1 if section s has ≥ 1 session of course c in period pk
-                          (auxiliary variable derived from x)
-  p[s,c,pk0] ∈ {0,1}  — 1 if the window [pk0, pk0+1, …, pk0+M] is a consecutive
-                          violation for (s, c)  (only created when consecutive rule enabled)
+  x[b,c,t]   ∈ {0,1}  — 1 if bucket b is taught course c at slot t 
+                        (in Sections mode there is exactly one course per (b,t); 
+                        in Areas mode multiple x[b,c,t]=1 for a single (b,t) are allowed unless other constraints forbid them)
+  y[scope,pk]  ∈ {0,1}  — 1 if bucket b has ≥ 1 session of course c in period pk
+                        auxiliary presence variable for a scope in period pk where scope is:
+                            - Sections mode: scope = (b,c) (bucket-course pair)
+                            - Areas mode: scope = c (course-level scope)
+  p[scope,pk0] ∈ {0,1}  — 1 if the window [pk0, pk0+1, …, pk0+M] is a consecutive violation for scope (scope is defined save as y)  (only created when consecutive rule enabled)
 
 OBJECTIVE:
   Consecutive rule DISABLED → Minimize 0                      (pure feasibility)
-  Consecutive rule ENABLED  → Minimize Σ_{s,c,pk0} p[s,c,pk0] (minimize violations)
+  Consecutive rule ENABLED  → Minimize Σ_{scope,pk0} p[scope,pk0] (minimize violations)
 
 FIXED HARD CONSTRAINTS (always applied):
   (H1) Session Fulfillment:
-         Σ_t x[s,c,t] = req[s,c]    ∀ s, c
+         Σ_t x[b,c,t] = req[b,c]    ∀ b ∈ B, c ∈ C
 
-  (H2) One Course per Slot (zero slack):
-         Σ_c x[s,c,t] = 1   ∀ s, t
+  (H2) One Course per Slot (zero slack in Sections mode only):
+         Σ_c x[b,c,t] = 1   ∀ b, t  (enforced only when configMode == 'sections')
+         [In Areas mode this constraint is not applied; areas may host parallel sessions.]
 
   (H3) No Faculty Cloning:
-         Σ_{(s,c): fac[s,c]=f} x[s,c,t] ≤ 1     ∀ f, (date, fromTime)
-         [at any given date + time window, a faculty member appears in at most one section]
+         Σ_{(b,c): fac[b,c]=f} x[b,c,t] ≤ 1     ∀ f, (date, fromTime)
+         [a faculty member appears in at most one bucket at a given date+time]
 
   (H4) Maximum Daily Workload:
-         Σ_{(s,c,t): date[s,t]=d, fac[s,c]=f} x[s,c,t] ≤ m_f    ∀ f, d
+         Σ_{(b,c,t): date[b,t]=d, fac[b,c]=f} x[b,c,t] ≤ m_f    ∀ f, d
 
   (H5) Daily Course Spacing:
-         Σ_{t: date[s,t]=d} x[s,c,t] ≤ 1    ∀ s, c, d
+         Σ_{t: date[b,t]=d} x[b,c,t] ≤ 1    ∀ b, c, d
 
 OPTIONAL HARD CONSTRAINTS (toggled via constraintConfig):
   (H6) Faculty Unavailability:
-         x[s,c,t] = 0   if fac[s,c] ∈ unavail and date[s,t] ∈ unavail[fac[s,c]]
+         x[b,c,t] = 0   if fac[b,c] ∈ unavail and date[b,t] ∈ unavail[fac[b,c]]
 
   (H7) Course Conflict Groups:
-         Σ_{c ∈ C_g, s ∈ S_g, t: (date[s,t], ft[s,t]) = (d, ft)} x[s,c,t] ≤ 1
+         Σ_{c ∈ C_g, b ∈ B_g, t: (date[b,t], ft[b,t]) = (d, ft)} x[b,c,t] ≤ 1
          ∀ g, (d, ft)
-         [courses in the same group may not run at the same date+time for affected sections]
+         [courses in the same group may not run at the same date+time (for affected sections in Sections mode, across all areas in Areas mode)]
 
 SOFT CONSTRAINT — Consecutive Sessions Rule (when enabled):
-  Auxiliary constraints linking y ↔ x:
-  (A1) y[s,c,pk] ≥ x[s,c,t]                      ∀ s,c,t  where pk[s,t] = pk
+  Auxiliary constraints linking y ↔ x (applied using the chosen scope):
+  (A1) y[scope,pk] ≥ x[b,c,t]                      ∀ b,c,t  where pk[b,t] = pk and scope applies
        [y is forced to 1 if any session exists in period pk]
-  (A2) y[s,c,pk] ≤ Σ_{t: pk[s,t]=pk} x[s,c,t]   ∀ s, c, pk
+  (A2) y[scope,pk] ≤ Σ_{t: pk[b,t]=pk and scope applies} x[b,c,t]   ∀ b, c, pk
        [y is forced to 0 if no sessions exist in period pk]
 
-  Window eligibility — a window W = [pk0, pk0+1, …, pk0+M] is eligible for (s,c) iff:
-    (i)  All M+1 period keys exist in sc_period_slots for (s,c), AND
+  Window eligibility — a window W = [pk0, pk0+1, …, pk0+M] is eligible for a given scope iff:
+    (i)  All M+1 period keys exist in the set of period slots relevant to that scope, AND
     (ii) All M+1 period keys share the same boundary key bk  (when reset_boundary ≠ "none")
          [sequences do not carry over across month boundaries, etc.]
 
   Penalty activation:
-  (P)  p[s,c,pk0] ≥ Σ_{pk ∈ W} y[s,c,pk] - M    ∀ eligible windows W
+  (P)  p[scope,pk0] ≥ Σ_{pk ∈ W} y[scope,pk] - M    ∀ eligible windows W
        When all M+1 y-values equal 1 → RHS = 1, so p is forced to 1 (violation counted).
        When fewer than M+1 y-values equal 1 → RHS ≤ 0, constraint is slack (p stays 0).
 """

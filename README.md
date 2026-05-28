@@ -69,15 +69,18 @@ As a Business Analyst, we formulate this as a mathematical optimization problem 
 ## Features
 
 - Flask web application with a user-friendly interface to configure and generate timetables.
-- **Configure tab** with four subtabs:
-  - *Sections* — define teaching periods and available weekly time slots per section.
+- **Configuration**:
+  - **Modes:** The scheduler supports two configuration modes:
+    - *Sections mode* — each section has a separate timetable and every section slot is filled by exactly one course; mappings are `section → course → faculty`.
+    - *Areas mode* — configuration is by named areas; areas may host parallel sessions in the same slot (subject to faculty/load/conflict rules); mappings are `course → faculty` (area is taken from the course's `areaShortName`).
+  - *Sections/Areas* — define teaching periods and available weekly time slots per section.
   - *Courses* — define courses, credit hours, and required session counts, and *course conflict groups* (define sets of courses that must not run simultaneously, scoped to specific sections).
   - *Faculty* — add faculty members, set daily workload limits, and mark unavailable dates.
-  - *Mapping* — assign faculty to teach specific courses for specific sections.
+  - *Mapping* — assign faculty to teach specific courses (for specific sections if sections mode is selected).
   - *Constraints* — review fixed hard constraints, toggle optional constraints, and configure the consecutive sessions soft constraint (max consecutive periods, period unit, reset boundary).
-- Import and export the full configuration (sections, courses, faculty, mappings, conflict groups, constraint settings, and generated timetable) as a structured Excel file. [Download Template](./static/Timetable_Config_LP.xlsx)
+- Import and export the full configuration (sections/areas, courses, faculty, mappings, conflict groups, constraint settings, and generated timetable) as a structured Excel file. [Sections Template](./static/Sections_timetable_config.xlsx) | [Areas Template](./static/Areas_timetable_config.xlsx)
 - The solver minimizes consecutive-period violations under the configured soft constraint; if the rule is disabled, it solves for pure feasibility.
-- **Timetable tab** — view the generated schedule in a filterable pivot table (filter by date, day, time, and section).
+- **Timetable** — view the generated schedule in a filterable pivot table (filter by date, day, time, and section/areas).
 - **Verify** the generated timetable against all active constraints and view a week-by-week course distribution heatmap per section.
 
 ## Contribute
