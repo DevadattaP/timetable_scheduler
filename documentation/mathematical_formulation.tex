@@ -92,14 +92,14 @@ No soft objective; the solver simply finds any schedule satisfying all active ha
         \sum_{t \in T_b} x_{b,c,t} = R_{b,c}
         \quad \forall\, b \in B,\; c \in C
     \end{equation}
-    Every bucket must complete the exact required number of sessions for every assigned course.
+    Every bucket must complete the required number of sessions for every assigned course.
 
-    \item \textbf{H2: One Course per Slot (Zero Slack)}
+    \item \textbf{H2: At Most One Course per Slot}
     \begin{equation}
-        \sum_{c \in C} x_{b,c,t} = 1
+        \sum_{c \in C} x_{b,c,t} \leq 1
         \quad \forall\, b \in B,\; t \in T_b \quad \text{(Sections mode only)}
     \end{equation}
-    In Sections mode each available time slot for a bucket (section) must be occupied by exactly one course. This constraint is not applied in Areas mode, where areas may host parallel sessions in the same slot.
+    In Sections mode each available time slot for a bucket (section) may be occupied by at most one course, so unused slots are allowed when total available capacity exceeds required sessions. This constraint is not applied in Areas mode, where areas may host parallel sessions in the same slot.
 
     \item \textbf{H3: No Faculty Cloning}
     \begin{equation}

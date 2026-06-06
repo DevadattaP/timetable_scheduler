@@ -50,9 +50,9 @@ FIXED HARD CONSTRAINTS (always applied):
   (H1) Session Fulfillment:
          Σ_t x[b,c,t] = req[b,c]    ∀ b ∈ B, c ∈ C
 
-  (H2) One Course per Slot (zero slack in Sections mode only):
-         Σ_c x[b,c,t] = 1   ∀ b, t  (enforced only when configMode == 'sections')
-         [In Areas mode this constraint is not applied; areas may host parallel sessions.]
+  (H2) At Most One Course per Slot (empty slots allowed in Sections mode):
+      Σ_c x[b,c,t] ≤ 1   ∀ b, t  (enforced only when configMode == 'sections')
+      [In Areas mode this constraint is not applied; areas may host parallel sessions.]
 
   (H3) No Faculty Cloning:
          Σ_{(b,c): fac[b,c]=f} x[b,c,t] ≤ 1     ∀ f, (date, fromTime)
@@ -301,10 +301,11 @@ def _solve(data):
         for b in bucket_names:
             total_req = sum(v for (bucket, _), v in required.items() if bucket == b)
             total_avail = n_slots[b]
-            if total_req != total_avail:
+            # Extra capacity is allowed; only a shortage of slots is infeasible.
+            if total_req > total_avail:
                 return {
                     "status": "error",
-                    "message": f"Section {b}: {total_req} required sessions ≠ {total_avail} available slots",
+                    "message": f"Section {b}: {total_req} required sessions exceed {total_avail} available slots",
                     "timetable": [],
                 }
 
@@ -430,7 +431,7 @@ def _solve(data):
         for b in bucket_names:
             valid_c = [c for c in COURSES if (b, c) in valid_pairs]
             for t in range(n_slots[b]):
-                prob += pulp.lpSum(x[(b, c, t)] for c in valid_c) == 1
+                prob += pulp.lpSum(x[(b, c, t)] for c in valid_c) <= 1
 
     for (d, ft), fac_grp in time_slot_fac.items():
         for f, triplets in fac_grp.items():
@@ -611,7 +612,7 @@ def verify_timetable(data, timetable):
         slot_groups = df.groupby([bucket_col, "dateStr", "fromTime", "toTime"])
         for (b, dt, ft, tt), grp in slot_groups:
             assigned = len(grp)
-            if assigned != 1:
+            if assigned > 1:
                 slot_assignment_violations.append({
                     "section": b,
                     "date": dt,
