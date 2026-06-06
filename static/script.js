@@ -36,6 +36,22 @@ function loadState() {
   State.timetableMeta = get(KEY.timetableMeta) || null;
   State.courseConflicts = get(KEY.conflicts) || [];
   State.constraintConfig = get(KEY.constraintConfig) || defaultConstraintConfig();
+  // Normalize faculty entries for backward compatibility
+  if (Array.isArray(State.faculty)) {
+    State.faculty = State.faculty.map(f => {
+      const nf = Object.assign({}, f);
+      if (!Array.isArray(nf.unavailableSlots)) {
+        if (Array.isArray(nf.unavailableDates)) {
+          nf.unavailableSlots = nf.unavailableDates.map(d => ({date: d, fromTime: '', toTime: ''}));
+          delete nf.unavailableDates;
+        } else {
+          nf.unavailableSlots = [];
+        }
+      }
+      return nf;
+    });
+    set(KEY.faculty, State.faculty);
+  }
 }
 
 function saveSection()  { set(KEY.sections, State.sections); touchConfig(); }
@@ -201,7 +217,8 @@ function saveDates() {
 }
 
 // SECTIONS CRUD
-const WEEKDAYS = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+// Align array index with JavaScript Date.getDay(): 0 = Sunday, 1 = Monday, ...
+const WEEKDAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 
 function sectionSlotRowHTML(slot, idx, rowPrefix='section') {
   return `<div class="slot-row" id="${rowPrefix}-slot-row-${idx}">
@@ -814,15 +831,256 @@ document.getElementById('add-conflict-btn').addEventListener('click', () => open
 
 // FACULTY CRUD
 let _dateCounter = 0;
-function addDateRow(val='') {
+
+// Compute available slot options for a given date (filters by mappings when possible)
+// If no mappings exist, return all slots for the date from all sections/areas
+function getAvailableSlotOptionsForDate(facShort, dateStr) {
+  if (!dateStr) return [];
+  const d = new Date(dateStr + 'T00:00:00');
+  if (isNaN(d)) return [];
+  const weekday = WEEKDAYS[d.getDay()];
+  const opts = [];
+  const seen = new Set();
+
+  if (isSectionMode()) {
+    State.sections.forEach(sec => {
+      // If mappings exist, only include slots for sections where faculty teaches; otherwise include all
+      if (State.sectionMappings.length > 0) {
+        const teachesInSection = State.sectionMappings.some(m => m.section === sec.name && m.facultyShortName === facShort);
+        if (!teachesInSection && facShort) return;
+      }
+      for (const sl of sec.slots || []) {
+        if (sl.weekday !== weekday) continue;
+        if (State.startDate && State.endDate && (dateStr < State.startDate || dateStr > State.endDate)) continue;
+        const key = `${sl.fromTime}||${sl.toTime}`;
+        if (!seen.has(key)) { seen.add(key); opts.push({value:key, label:`${sl.fromTime} – ${sl.toTime}`}); }
+      }
+    });
+  } else {
+    State.areas.forEach(area => {
+      // respect excludedDates
+      if (Array.isArray(area.excludedDates) && area.excludedDates.includes(dateStr)) return;
+      // If mappings exist, only include slots for areas where faculty teaches; otherwise include all
+      if (State.areaMappings.length > 0) {
+        const teachesInArea = State.areaMappings.some(m => {
+          const course = State.courses.find(c => c.code === m.courseCode);
+          return m.facultyShortName === facShort && course && course.areaShortName === area.shortName;
+        });
+        if (!teachesInArea && facShort) return;
+      }
+      for (const sl of area.slots || []) {
+        if (sl.weekday !== weekday) continue;
+        if (State.startDate && State.endDate && (dateStr < State.startDate || dateStr > State.endDate)) continue;
+        const key = `${sl.fromTime}||${sl.toTime}`;
+        if (!seen.has(key)) { seen.add(key); opts.push({value:key, label:`${sl.fromTime} – ${sl.toTime}`}); }
+      }
+    });
+  }
+  // fallback: if no slots found, return empty (caller may show toast)
+  return opts.sort((a,b)=>a.label.localeCompare(b.label));
+}
+
+// Return set of weekdays (strings) that the faculty teaches based on mappings and slots
+// If no mappings exist, return all weekdays from all sections/areas
+function getAllowedWeekdaysForFaculty(facShort) {
+  const days = new Set();
+  if (!facShort) return days;
+  if (isSectionMode()) {
+    if (State.sectionMappings.length > 0) {
+      // Mappings exist: filter by sections where faculty teaches
+      const secs = State.sectionMappings.filter(m => m.facultyShortName === facShort).map(m => m.section);
+      secs.forEach(sname => {
+        const sec = State.sections.find(s => s.name === sname);
+        if (!sec) return;
+        (sec.slots || []).forEach(sl => days.add(sl.weekday));
+      });
+    } else {
+      // No mappings: faculty can teach all sections
+      State.sections.forEach(sec => {
+        (sec.slots || []).forEach(sl => days.add(sl.weekday));
+      });
+    }
+  } else {
+    if (State.areaMappings.length > 0) {
+      // Mappings exist: filter by areas where faculty teaches
+      const courses = State.areaMappings.filter(m => m.facultyShortName === facShort).map(m => m.courseCode);
+      courses.forEach(code => {
+        const course = State.courses.find(c => c.code === code);
+        if (!course) return;
+        const area = State.areas.find(a => a.shortName === course.areaShortName);
+        if (!area) return;
+        (area.slots || []).forEach(sl => days.add(sl.weekday));
+      });
+    } else {
+      // No mappings: faculty can teach all areas
+      State.areas.forEach(area => {
+        (area.slots || []).forEach(sl => days.add(sl.weekday));
+      });
+    }
+  }
+  return days;
+}
+
+// Return list of allowed date strings (YYYY-MM-DD) between teaching period matching faculty weekdays and area excludedDates
+function getAllowedDatesForFaculty(facShort) {
+  const allowed = [];
+  if (!State.startDate || !State.endDate) return allowed;
+  const wkdays = getAllowedWeekdaysForFaculty(facShort);
+  if (!wkdays || wkdays.size === 0) return allowed;
+  const s = new Date(State.startDate + 'T00:00:00');
+  const e = new Date(State.endDate + 'T00:00:00');
+  for (let d = new Date(s); d <= e; d.setDate(d.getDate()+1)) {
+    const wd = WEEKDAYS[d.getDay()];
+    if (!wkdays.has(wd)) continue;
+    const ds = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+    if (!isSectionMode()) {
+      // in area mode, ensure none of the relevant areas exclude this date
+      const courses = State.areaMappings.filter(m => m.facultyShortName === facShort).map(m => m.courseCode);
+      const areasSeen = new Set();
+      courses.forEach(code => { const course = State.courses.find(c=>c.code===code); if (course && course.areaShortName) areasSeen.add(course.areaShortName); });
+      let excluded = false;
+      areasSeen.forEach(as => {
+        const area = State.areas.find(a => a.shortName === as);
+        if (area && Array.isArray(area.excludedDates) && area.excludedDates.includes(ds)) excluded = true;
+      });
+      if (excluded) continue;
+    }
+    allowed.push(ds);
+  }
+  return allowed;
+}
+
+function getUsedSlotsFromUI(date, excludeRow = null) {
+  const rows = document.querySelectorAll('#unavail-container > div');
+  const used = [];
+
+  rows.forEach(div => {
+    if (excludeRow && div === excludeRow) return;
+
+    const dateEl = div.querySelector('.unavail-date');
+    const slotEl = div.querySelector('.unavail-slot');
+
+    if (!dateEl || !slotEl) return;
+
+    if (dateEl.value === date && slotEl.value) {
+      used.push(slotEl.value);
+    }
+  });
+
+  return used;
+}
+
+function addUnavailRow(val={date:'', fromTime:'', toTime:''}) {
   const c = document.getElementById('unavail-container');
+  // prerequisites: teaching period and slots must exist
+  if (!State.startDate || !State.endDate) { toast('Set teaching period before adding unavailable slots.','warning'); return; }
+  if (isSectionMode() && !State.sections.length) { toast('Add sections and their slots before marking unavailable slots.','warning'); return; }
+  if (!isSectionMode() && !State.areas.length) { toast('Add areas and their slots before marking unavailable slots.','warning'); return; }
+
   const idx = _dateCounter++;
   const div = document.createElement('div');
   div.id = 'date-row-'+idx;
   div.style.cssText = 'display:flex;gap:.5rem;margin-bottom:.4rem;align-items:center';
-  div.innerHTML = `<input type="date" class="unavail-date" value="${val}" style="flex:1;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:.45rem .65rem;border-radius:var(--r);font-family:var(--font-u);font-size:.85rem"/>
+  
+  const dateVal = val && val.date ? val.date : '';
+  const ftVal = val && val.fromTime ? val.fromTime : '';
+  const ttVal = val && val.toTime ? val.toTime : '';
+  div.dataset.slotKey = ftVal && ttVal ? `${ftVal}||${ttVal}` : '';
+  // build date select filtered by allowed dates for current faculty
+  const facShortEl = document.getElementById('f-short');
+  const facShort = facShortEl ? facShortEl.value.trim() : '';
+  const allowedDates = getAllowedDatesForFaculty(facShort).filter(date => {
+    const opts = getAvailableSlotOptionsForDate(facShort, date).map(o => o.value);
+    const used = getUsedSlotsFromUI(date);
+    return opts.length > used.length;
+  });
+  const dateOptions = allowedDates.map(d=>`<option value="${d}">${d}</option>`).join('');
+  div.innerHTML = `
+    <select class="unavail-date" style="flex:1;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:.45rem .65rem;border-radius:var(--r);font-family:var(--font-u);font-size:.85rem">` +
+      `<option value="">(select date)</option>` + dateOptions +
+    `</select>
+    <select class="unavail-slot" style="flex:1;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:.45rem .65rem;border-radius:var(--r);font-family:var(--font-u);font-size:.85rem; min-width:220px">` +
+      `<option value="">(select slot)</option>` +
+    `</select>
     <button class="btn btn-danger btn-icon btn-sm" onclick="document.getElementById('date-row-${idx}').remove()">✕</button>`;
+
   c.appendChild(div);
+
+  const dateInput = div.querySelector('.unavail-date');
+  const slotSelect = div.querySelector('.unavail-slot');
+
+  function refreshOptionsForDate(dateVal, currentRow) {
+    const facShortEl2 = document.getElementById('f-short');
+    const facShort2 = facShortEl2 ? facShortEl2.value.trim() : '';
+
+    const opts = getAvailableSlotOptionsForDate(facShort2, dateVal);
+
+    const used = new Set(getUsedSlotsFromUI(dateVal, currentRow));
+
+    const filtered = opts.filter(o => !used.has(o.value));
+
+    const currentValue = slotSelect.value || currentRow.dataset.slotKey;
+
+    slotSelect.innerHTML =
+      '<option value="">(select slot)</option>' +
+      filtered.map(o => `<option value="${o.value}">${o.label}</option>`).join('');
+
+    // restore selection
+    if (currentValue && filtered.some(o => o.value === currentValue)) {
+      slotSelect.value = currentValue;
+    }
+  }
+
+  dateInput.addEventListener('change', () => {
+    const val = dateInput.value;
+    if (!val) return;
+    const facShortEl2 = document.getElementById('f-short');
+    const facShort2 = facShortEl2 ? facShortEl2.value.trim() : '';
+    const allowed = getAllowedDatesForFaculty(facShort2);
+    if (allowed.length && !allowed.includes(val)) {
+      toast('Selected date is not valid for this faculty (no matching slots).','warning');
+      dateInput.value = '';
+      slotSelect.innerHTML = '<option value="">(select slot)</option>';
+      return;
+    }
+    refreshOptionsForDate(val, div);
+    if (!slotSelect.options.length || slotSelect.options.length === 1) {
+      toast('No defined slots fall on this date (or mappings filter them out).','warning');
+    }
+  });
+  // also handle input events (for some browsers/UX flows)
+  dateInput.addEventListener('input', () => {
+    const evt = new Event('change'); dateInput.dispatchEvent(evt);
+  });
+
+  // populate initially if value present
+  if (dateVal) {
+    // ensure dateVal is in allowed list; if not, ignore
+    const facShortEl3 = document.getElementById('f-short');
+    const facShort3 = facShortEl3 ? facShortEl3.value.trim() : '';
+    const allowed3 = getAllowedDatesForFaculty(facShort3);
+    if (!allowed3.length || allowed3.includes(dateVal)) {
+      dateInput.value = dateVal;
+      refreshOptionsForDate(dateVal, div);
+
+      // AFTER OPTIONS ARE LOADED → restore slot
+      const key = ftVal && ttVal ? `${ftVal}||${ttVal}` : '';
+      setTimeout(() => {
+        if (key) {
+          slotSelect.value = key;
+          div.dataset.slotKey = key;
+        }
+      }, 0);
+    }
+  }
+
+  // Make slot select reactive
+  slotSelect.addEventListener('change', () => {
+    const dateVal = dateInput.value;
+    if (dateVal) {
+      refreshOptionsForDate(dateVal, div);
+    }
+  });
 }
 
 function facultyModalBody(f) {
@@ -837,16 +1095,37 @@ function facultyModalBody(f) {
       <div class="form-group"><label>Max Load / Day</label><input type="number" id="f-load" min="1" max="10" value="${f?f.maxLoadPerDay:2}"/></div>
     </div>
     <hr class="form-divider"/>
-    <div class="slots-label">Unavailable Dates</div>
+    <div class="slots-label">Unavailable Time Slots</div>
     <div id="unavail-container"></div>
-    <button class="btn btn-ghost btn-sm" style="margin-top:.4rem" onclick="addDateRow('')">+ Add Date</button>`;
+    <button class="btn btn-ghost btn-sm" style="margin-top:.4rem" onclick="addUnavailRow({})">+ Add Time Slot</button>`;
 }
 
 function openFacultyModal(mode, idx) {
   const f = (mode!=='add') ? State.faculty[idx] : null;
   const title = mode==='edit'?'Edit Faculty':'Add Faculty';
   openModal(title, facultyModalBody(f), ()=>saveFacultyModal(mode,idx));
-  if(f) f.unavailableDates.forEach(d=>addDateRow(d));
+  if (f) {
+    // normalize legacy unavailableDates -> unavailableSlots
+    const slots = f.unavailableSlots || (f.unavailableDates ? f.unavailableDates.map(d=>({date:d, fromTime:'', toTime:''})) : []);
+    slots.forEach(s => addUnavailRow(s));
+  }
+  // attach change handler to refresh date selects when faculty short name is edited in modal
+  const fShortEl = document.getElementById('f-short');
+  if (fShortEl) {
+    fShortEl.addEventListener('change', () => {
+      const rows = document.querySelectorAll('#unavail-container > div');
+      rows.forEach(div => {
+        const dateSel = div.querySelector('.unavail-date');
+        if (!dateSel) return;
+        const prev = dateSel.value;
+        const opts = getAllowedDatesForFaculty(fShortEl.value.trim());
+        dateSel.innerHTML = '<option value="">(select date)</option>' + opts.map(d=>`<option value="${d}">${d}</option>`).join('');
+        if (opts.includes(prev)) dateSel.value = prev; else dateSel.value = '';
+        // trigger change to refresh slots
+        const evt = new Event('change'); dateSel.dispatchEvent(evt);
+      });
+    });
+  }
 }
 
 function saveFacultyModal(mode, editIdx) {
@@ -854,10 +1133,35 @@ function saveFacultyModal(mode, editIdx) {
   const full  = document.getElementById('f-full').value.trim();
   const short = document.getElementById('f-short').value.trim();
   const load  = parseInt(document.getElementById('f-load').value)||2;
-  const dates = Array.from(document.querySelectorAll('.unavail-date'))
-    .map(i=>i.value).filter(Boolean);
+  const rows = document.querySelectorAll('#unavail-container > div');
+  for (const div of rows) {
+    const dateEl = div.querySelector('.unavail-date');
+    const slotEl = div.querySelector('.unavail-slot');
+
+    const date = dateEl?.value;
+    const slot = slotEl?.value;
+
+    // CASE: date selected but slot missing
+    if (date && !slot) {
+      showModalError('For each unavailable date, either select a time slot or remove the date entry.');
+      return;
+    }
+  }
+  const slots = Array.from(document.querySelectorAll('#unavail-container .slot-row, #unavail-container > div'))
+    .map(div => {
+      const dateEl = div.querySelector('.unavail-date');
+      const slotEl = div.querySelector('.unavail-slot');
+      if (!dateEl) return null;
+      const date = dateEl.value;
+      if (!date) return null;
+      if (!slotEl || !slotEl.value) {
+        return null; // invalid entry should not be saved
+      }
+      const parts = slotEl.value.split('||');
+      return { date, fromTime: parts[0]||'', toTime: parts[1]||'' };
+    }).filter(Boolean);
   if(!full||!short){ showModalError('Full name and short name are required.'); return; }
-  const obj = {fullName:full, shortName:short, maxLoadPerDay:load, unavailableDates:dates};
+  const obj = {fullName:full, shortName:short, maxLoadPerDay:load, unavailableSlots:slots};
   const dup = State.faculty.find((f,i)=>f.shortName===short&&(mode==='add'||i!==editIdx));
   if(dup){ showModalError(`Faculty short name "${short}" already exists.`); return; }
   if(mode==='edit') State.faculty[editIdx]=obj;
@@ -890,7 +1194,7 @@ function renderFaculty() {
       <td>${f.fullName}</td>
       <td><span class="badge badge-gold" style="font-family:var(--font-m)">${f.shortName}</span></td>
       <td style="text-align:center">${f.maxLoadPerDay}</td>
-      <td style="font-size:.78rem;color:var(--text2)">${f.unavailableDates.length?f.unavailableDates.map(d=>`<span class="badge badge-grey" style="margin:.1rem">${d}</span>`).join(' '):'<span style="color:var(--muted)">None</span>'}</td>
+      <td style="font-size:.78rem;color:var(--text2)">${(Array.isArray(f.unavailableSlots) && f.unavailableSlots.length)? f.unavailableSlots.map(s=>`<span class="badge badge-grey" style="margin:.1rem">${s.date}${s.fromTime?(' ' + s.fromTime + '-' + s.toTime):''}</span>`).join(' '):'<span style="color:var(--muted)">None</span>'}</td>
       <td>
         <button class="btn btn-ghost btn-icon btn-sm" title="Edit" onclick="openFacultyModal('edit',${i})">✎</button>
         <button class="btn btn-danger btn-icon btn-sm" title="Delete" onclick="deleteFaculty(${i})">✕</button>
@@ -2009,15 +2313,15 @@ function exportToExcel() {
   freezeHeader(wsCourse);
   XLSX.utils.book_append_sheet(wb, wsCourse, 'Courses');
  
-  // FACULTY sheet 
-  // Flatten: one row per unavailable date (faculty repeated); if none, one row with empty date
-  const fHeader = ['Full Name', 'Short Name', 'Max Load Per Day', 'Unavailable Dates (YYYY-MM-DD)'];
+  // FACULTY sheet
+  // Store unavailable slots as semicolon-separated entries: YYYY-MM-DD|HH:MM-HH:MM;...
+  const fHeader = ['Full Name', 'Short Name', 'Max Load Per Day', 'Unavailable Slots (YYYY-MM-DD|HH:MM-HH:MM;...)'];
   const fRows   = [];
   State.faculty.forEach(f => {
-    const dates = Array.isArray(f.unavailableDates)
-      ? f.unavailableDates.join(', ')
-      : '';
-    fRows.push([f.fullName, f.shortName, f.maxLoadPerDay, dates]);
+    const slots = Array.isArray(f.unavailableSlots)
+      ? f.unavailableSlots.map(s => s.date + (s.fromTime ? '|' + s.fromTime + '-' + s.toTime : '')).join('; ')
+      : (Array.isArray(f.unavailableDates) ? f.unavailableDates.join('; ') : '');
+    fRows.push([f.fullName, f.shortName, f.maxLoadPerDay, slots]);
   });
   const wsFac = XLSX.utils.aoa_to_sheet([fHeader, ...fRows]);
   setColWidths(wsFac, [30, 16, 16, 24]);
@@ -2248,21 +2552,30 @@ function importFromExcel(file) {
           const short = String(r['Short Name'] || '').trim();
           if (!short) return;
 
-          const datesStr = String(r['Unavailable Dates (YYYY-MM-DD)'] || '').trim();
-          let dates = [];
-
-          if (datesStr) {
-            dates = datesStr
-              .split(',')
-              .map(d => d.trim())
-              .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d));
+          const slotsStr = String(r['Unavailable Slots (YYYY-MM-DD|HH:MM-HH:MM;...)'] || r['Unavailable Slots'] || r['Unavailable Dates (YYYY-MM-DD)'] || '').trim();
+          const slots = [];
+          if (slotsStr) {
+            slotsStr.split(/;|,/).map(s=>s.trim()).filter(Boolean).forEach(token => {
+              // token formats: YYYY-MM-DD or YYYY-MM-DD|HH:MM-HH:MM
+              const parts = token.split('|').map(p=>p.trim());
+              const date = parts[0];
+              if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
+              if (parts[1]) {
+                const times = parts[1].split('-').map(t=>t.trim());
+                const ft = times[0]||'';
+                const tt = times[1]||'';
+                slots.push({date, fromTime: ft, toTime: tt});
+              } else {
+                slots.push({date, fromTime:'', toTime:''});
+              }
+            });
           }
 
           facMap[short] = {
             fullName: String(r['Full Name'] || '').trim(),
             shortName: short,
             maxLoadPerDay: parseInt(r['Max Load Per Day']) || 2,
-            unavailableDates: dates
+            unavailableSlots: slots
           };
         });
         State.faculty = Object.values(facMap);

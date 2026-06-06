@@ -80,11 +80,11 @@
       <div class="card">
         <div class="card-title">🔒 Hard Constraints</div>
         <ul class="rule-list">
-          <li><strong>Zero Slack:</strong> Every available slot must be filled by exactly one class.</li>
+          <li><strong>Session fulfillment:</strong> Every available slot must be filled by at max one class. Some slots may remain unused, if requirements are fulfilled already.</li>
           <li><strong>No Faculty Cloning:</strong> A faculty member cannot teach two sections simultaneously.</li>
           <li><strong>Max Daily Load:</strong> Faculty can teach at most N sessions per calendar day.</li>
           <li><strong>Course Spacing:</strong> A section cannot have the same course twice in one day.</li>
-          <li><strong>Unavailability (optional):</strong> Faculty are not scheduled on blocked dates.</li>
+          <li><strong>Unavailability (optional):</strong> Faculty are not scheduled on blocked timeslots.</li>
           <li><strong>Course conflicts (optional):</strong> Courses in specified groups cannot be scheduled at the same time.</li>
         </ul>
       </div>
@@ -211,7 +211,7 @@
   <!-- FACULTY -->
   <div id="subtab-faculty" class="subtab-content">
     <div class="section-header">
-      <div><h2>Faculty</h2><p>Add faculty members and mark unavailable dates</p></div>
+      <div><h2>Faculty</h2><p>Add faculty members and mark unavailable timeslots</p></div>
       <button class="btn btn-primary" id="add-faculty-btn">+ Add Faculty</button>
     </div>
     <div id="faculty-list"></div>
@@ -251,7 +251,7 @@
           <input type="checkbox" id="c-unavail" checked/>
           <div>
             <strong>H6 - Faculty Unavailability</strong>
-            <p>Block scheduling faculty on their marked unavailable dates.</p>
+            <p>Block scheduling faculty on their marked unavailable timeslots.</p>
           </div>
         </label>
       </div>

@@ -8,9 +8,9 @@ As a Business Analyst, we formulate this as a mathematical optimization problem 
 
 ### Fixed Hard Constraints (always enforced)
 
-1. **Zero Slack / Exact Fulfillment:** Every section must complete exactly the required number of sessions for each of their courses. Because total supply (available slots) equals total demand (required sessions), every single available time slot must be filled by exactly one class.
+1. **Required Fulfillment:** Every section must complete the required number of sessions for each of their courses. If total supply (available slots) exceeds total demand (required sessions), the extra slots may remain unused.
 
-2. **One Course per Slot:** Each available time slot for a section is occupied by exactly one course — a direct consequence of the zero-slack condition above.
+2. **At Most One Course per Slot:** Each available time slot for a section is occupied by at most one course, so unused slots are allowed when capacity exceeds demand.
 
 3. **No Faculty Cloning:** A faculty member cannot teach two different sections at the exact same date and time.
 
@@ -20,7 +20,7 @@ As a Business Analyst, we formulate this as a mathematical optimization problem 
 
 ### Optional Hard Constraints (can be toggled in the Constraints tab)
 
-6. **Faculty Unavailability:** A faculty member cannot be scheduled on any date listed in their unavailability log.
+6. **Faculty Unavailability:** A faculty member cannot be scheduled on any timeslot listed in their unavailability log.
 
 7. **Course Conflict Groups:** Courses assigned to the same conflict group cannot be scheduled at the same date and time, even across different sections. Conflict groups and the sections they apply to are configurable.
 
@@ -37,7 +37,7 @@ As a Business Analyst, we formulate this as a mathematical optimization problem 
 
 ## Hints
 
-- **The Infeasibility Trap:** It is tempting to make the consecutive-sessions rule a hard constraint. Because supply exactly equals demand (every slot must be filled), this frequently produces an infeasible model with no solution. The core modelling lesson is to relax such constraints into penalized soft constraints via auxiliary binary variables, allowing the solver to find the *best possible* schedule rather than failing entirely.
+- **The Infeasibility Trap:** It is tempting to make the consecutive-sessions rule a hard constraint. When supply exactly equals demand, this frequently produces an infeasible model with no solution. The core modelling lesson is to relax such constraints into penalized soft constraints via auxiliary binary variables, allowing the solver to find the *best possible* schedule rather than failing entirely.
 
 - **Time Overlaps:** A faculty member can teach the same course to two different sections on the same day, provided it does not violate the maximum daily workload constraint. The no-cloning rule applies only to the exact same date–time window, not to the same day in general.
 
@@ -71,11 +71,11 @@ As a Business Analyst, we formulate this as a mathematical optimization problem 
 - Flask web application with a user-friendly interface to configure and generate timetables.
 - **Configuration**:
   - **Modes:** The scheduler supports two configuration modes:
-    - *Sections mode* — each section has a separate timetable and every section slot is filled by exactly one course; mappings are `section → course → faculty`.
+   - *Sections mode* — each section has a separate timetable and each section slot may have at most one course, so unused slots are allowed; mappings are `section → course → faculty`.
     - *Areas mode* — configuration is by named areas; areas may host parallel sessions in the same slot (subject to faculty/load/conflict rules); mappings are `course → faculty` (area is taken from the course's `areaShortName`).
   - *Sections/Areas* — define teaching periods and available weekly time slots per section.
   - *Courses* — define courses, credit hours, and required session counts, and *course conflict groups* (define sets of courses that must not run simultaneously, scoped to specific sections).
-  - *Faculty* — add faculty members, set daily workload limits, and mark unavailable dates.
+  - *Faculty* — add faculty members, set daily workload limits, and mark unavailable timeslots.
   - *Mapping* — assign faculty to teach specific courses (for specific sections if sections mode is selected).
   - *Constraints* — review fixed hard constraints, toggle optional constraints, and configure the consecutive sessions soft constraint (max consecutive periods, period unit, reset boundary).
 - Import and export the full configuration (sections/areas, courses, faculty, mappings, conflict groups, constraint settings, and generated timetable) as a structured Excel file. [Sections Template](./static/Sections_timetable_config.xlsx) | [Areas Template](./static/Areas_timetable_config.xlsx)

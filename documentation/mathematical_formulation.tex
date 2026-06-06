@@ -48,7 +48,12 @@ This formulation represents the scheduling problem for the IIM EPGP Program, acc
         \item \texttt{reset\_boundary = "none"}:
               $\mathrm{Boundary}(s,t) = 0$ \quad (no reset; sequence is continuous)
     \end{itemize}
-    \item $\mathrm{Unavailable}(f,d)$: Binary flag; 1 if faculty $f$ is unavailable on date $d$, 0 otherwise. \quad \emph{(used by optional constraint H6)}
+    \item $\mathrm{Unavailable}(f,d,t_f)$: Set-valued parameter (or indicator function) defining faculty unavailability at slot level; 1 if faculty $f$ is unavailable on date $d$ and time-slot start $t_f$, 0 otherwise. Includes both:
+        \begin{itemize}
+            \item legacy full-day unavailability (entire date blocked), and
+            \item slot-specific unavailability (only certain time windows blocked within a date).
+        \end{itemize}
+        \quad \emph{(used by optional constraint H6)}
     \item $M_f$: Maximum sessions faculty $f$ may teach per calendar day.
     \item $M$: Maximum number of \textbf{consecutive periods} in which the same course may be taught to the same scope without incurring a penalty (user-configured; default $M=2$). A window of $M+1$ consecutive same-boundary periods that all have active sessions constitutes one violation.
     \item Scope: The consecutive-rule and auxiliary variables operate over a configurable \emph{scope}:
@@ -133,10 +138,13 @@ No soft objective; the solver simply finds any schedule satisfying all active ha
     \item \textbf{H6: Faculty Unavailability} \quad \emph{(Optional)}
     \begin{equation}
         x_{b,c,t} = 0
-        \quad \text{if}\;\mathrm{Unavailable}\!\bigl(\mathrm{Faculty}(b,c),\;\mathrm{Date}(b,t)\bigr) = 1
+        \quad \text{if}\;
+        \bigl(\mathrm{Date}(b,t), \mathrm{Time}(b,t)\bigr)
+        \in \mathcal{U}_{\mathrm{Faculty}(b,c)}
         \quad \forall\, b \in B,\; c \in C,\; t \in T_b
     \end{equation}
-    A class cannot be scheduled on a date when the assigned faculty member is marked unavailable.
+
+    A class cannot be scheduled in any time slot $(\text{date}, \text{fromTime})$ marked as unavailable for the assigned faculty member. Full-day unavailability is modeled as all time slots of that date being included in $\mathcal{U}_f$.
 
     \item \textbf{H7: Course Conflict Groups (Bucket Scope)} \quad \emph{(Optional)}
     \begin{equation}

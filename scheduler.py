@@ -28,7 +28,7 @@ PARAMETERS:
                  reset_boundary = "month" → bk = date.year × 100 + date.month
                  reset_boundary = "none"  → bk = 0  (no reset, sequence is continuous)
   m_f        = maximum sessions faculty f may teach per calendar day
-  unavail[f] = set of calendar dates on which faculty f is unavailable  [optional — H6]
+  unavail[f] = mapping of dates to unavailable time slots (set of from_time values); None indicates full-day unavailability  [optional — H6]
   M          = max_consecutive (integer ≥ 1, from constraintConfig)
                A window of (M+1) consecutive same-boundary periods triggers a penalty.
 
@@ -66,7 +66,8 @@ FIXED HARD CONSTRAINTS (always applied):
 
 OPTIONAL HARD CONSTRAINTS (toggled via constraintConfig):
   (H6) Faculty Unavailability:
-         x[b,c,t] = 0   if fac[b,c] ∈ unavail and date[b,t] ∈ unavail[fac[b,c]]
+         x[b,c,t] = 0   if slot (date[b,t], fromTime[b,t]) ∈ unavail[fac[b,c]]
+                        OR if date[b,t] is fully blocked for that faculty
 
   (H7) Course Conflict Groups:
          Σ_{c ∈ C_g, b ∈ B_g, t: (date[b,t], ft[b,t]) = (d, ft)} x[b,c,t] ≤ 1
@@ -101,44 +102,6 @@ from typing import Any, cast
 #  helpers 
 def _parse_date(s):
     return datetime.strptime(s, "%Y-%m-%d").date()
-
-
-def _generate_calendar(sections, start_date, end_date):
-    """
-    For each section, produce an ordered list of slot dicts covering every
-    matching weekday between start_date and end_date.
-
-    Each slot dict: {date, weekday, from_time, to_time, duration, time_label}
-    """
-    WEEKDAY = {
-        "Monday": 0, "Tuesday": 1, "Wednesday": 2, "Thursday": 3,
-        "Friday": 4, "Saturday": 5, "Sunday": 6,
-    }
-    calendar = {}
-    for sec in sections:
-        slot_defs = [
-            (WEEKDAY[sd["weekday"]], sd["fromTime"], sd["toTime"], float(sd["duration"]))
-            for sd in sec["slots"]
-        ]
-        slots = []
-        cur = start_date
-        while cur <= end_date:
-            wd = cur.weekday()
-            for (wd_num, ft, tt, dur) in slot_defs:
-                if wd == wd_num:
-                    slots.append({
-                        "date":       cur,
-                        "weekday":    cur.strftime("%A"),
-                        "from_time":  ft,
-                        "to_time":    tt,
-                        "duration":   dur,
-                        "time_label": f"{ft} – {tt}",
-                    })
-            cur += timedelta(days=1)
-        slots.sort(key=lambda x: (x["date"], x["from_time"]))
-        calendar[sec["name"]] = slots
-    return calendar
-
 
 def _generate_bucket_calendar(buckets, start_date, end_date, name_key, excluded_dates_key=None):
     """Build an ordered slot calendar for each schedule bucket.
@@ -270,9 +233,27 @@ def _solve(data):
 
     valid_pairs = set(faculty_map.keys())
 
+    # Build faculty unavailability as a mapping: faculty -> {date: set(of from_times or None for whole-day)}
     unavail = {}
     for f in faculty_cfg:
-        unavail[f["shortName"]] = {_parse_date(d) for d in f.get("unavailableDates", [])}
+        short = f["shortName"]
+        m = defaultdict(set)
+        # legacy full-day unavailable dates
+        for d in f.get("unavailableDates", []):
+            try:
+                m[_parse_date(d)].add(None)
+            except Exception:
+                continue
+        # new slot-level unavailability entries: list of {date, fromTime, toTime}
+        for s in f.get("unavailableSlots", []):
+            try:
+                if isinstance(s, dict) and s.get("date"):
+                    dt = _parse_date(s.get("date"))
+                    ft = s.get("fromTime", "")
+                    m[dt].add(ft)
+            except Exception:
+                continue
+        unavail[short] = m
 
     max_load = {f["shortName"]: int(f.get("maxLoadPerDay", 2)) for f in faculty_cfg}
 
@@ -472,8 +453,17 @@ def _solve(data):
                     continue
                 f = faculty_map[(b, c)]
                 for t in range(n_slots[b]):
-                    if date_of(b, t) in unavail.get(f, set()):
-                        prob += x[(b, c, t)] == 0
+                    d = date_of(b, t)
+                    ft = ft_of(b, t)
+                    fac_map = unavail.get(f, {})
+                    if d in fac_map:
+                        # whole-day block
+                        if None in fac_map[d]:
+                            prob += x[(b, c, t)] == 0
+                            continue
+                        # specific slot times (match on from_time)
+                        if ft in fac_map[d]:
+                            prob += x[(b, c, t)] == 0
 
     if apply_conflicts:
         for group in data.get("courseConflicts", []):
@@ -599,7 +589,19 @@ def verify_timetable(data, timetable):
             required[(m["section"], m["courseCode"])] = courses_cfg[m["courseCode"]]["requiredSlots"]
             faculty_map[(m["section"], m["courseCode"])] = m["facultyShortName"]
 
-    unavail = {f["shortName"]: set(f.get("unavailableDates", [])) for f in data["faculty"]}
+    # verifier: build same structure (dateStr -> set(fromTime) with '' or None indicating whole-day)
+    unavail = {}
+    for f in data["faculty"]:
+        short = f.get("shortName")
+        m = {}
+        for d in f.get("unavailableDates", []) or []:
+            m.setdefault(d, set()).add(None)
+        for s in f.get("unavailableSlots", []) or []:
+            if isinstance(s, dict) and s.get("date"):
+                dt = s.get("date")
+                ft = s.get("fromTime", "")
+                m.setdefault(dt, set()).add(ft)
+        unavail[short] = m
 
     session_violations = []
     for (b, c), req in required.items():
@@ -678,13 +680,17 @@ def verify_timetable(data, timetable):
     if apply_unavail:
         for _, row in df.iterrows():
             f = row["faculty"]
-            if row["dateStr"] in unavail.get(f, set()):
-                unavail_violations.append({
-                    "faculty": f,
-                    "date": row["dateStr"],
-                    "section": row[bucket_col],
-                    "course": row["courseCode"],
-                })
+            dt = row["dateStr"]
+            ft = row["fromTime"]
+            fac_map = unavail.get(f, {})
+            if dt in fac_map:
+                if None in fac_map[dt] or ft in fac_map[dt]:
+                    unavail_violations.append({
+                        "faculty": f,
+                        "date": dt,
+                        "section": row[bucket_col],
+                        "course": row["courseCode"],
+                    })
 
     apply_conflicts_v = _ccfg.get("courseConflicts", True)
     conflict_violations = []
