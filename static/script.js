@@ -980,7 +980,7 @@ function addUnavailRow(val={date:'', fromTime:'', toTime:''}) {
   const idx = _dateCounter++;
   const div = document.createElement('div');
   div.id = 'date-row-'+idx;
-  div.style.cssText = 'display:flex;gap:.5rem;margin-bottom:.4rem;align-items:center';
+  div.style.cssText = 'display:flex;gap:.5rem;margin-bottom:.4rem;align-items:center;flex-wrap: wrap;';
   
   const dateVal = val && val.date ? val.date : '';
   const ftVal = val && val.fromTime ? val.fromTime : '';
@@ -994,12 +994,16 @@ function addUnavailRow(val={date:'', fromTime:'', toTime:''}) {
     const used = getUsedSlotsFromUI(date);
     return opts.length > used.length;
   });
-  const dateOptions = allowedDates.map(d=>`<option value="${d}">${d}</option>`).join('');
+  const dateOptions = allowedDates.map(d => {
+    const dt = new Date(d + 'T00:00:00');
+    const label = `${d} (${WEEKDAYS[dt.getDay()]})`;
+    return `<option value="${d}">${label}</option>`;
+  }).join('');
   div.innerHTML = `
     <select class="unavail-date" style="flex:1;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:.45rem .65rem;border-radius:var(--r);font-family:var(--font-u);font-size:.85rem">` +
       `<option value="">(select date)</option>` + dateOptions +
     `</select>
-    <select class="unavail-slot" style="flex:1;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:.45rem .65rem;border-radius:var(--r);font-family:var(--font-u);font-size:.85rem; min-width:220px">` +
+    <select class="unavail-slot" style="flex:1;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:.45rem .65rem;border-radius:var(--r);font-family:var(--font-u);font-size:.85rem; min-width:150px">` +
       `<option value="">(select slot)</option>` +
     `</select>
     <button class="btn btn-danger btn-icon btn-sm" onclick="document.getElementById('date-row-${idx}').remove()">✕</button>`;
@@ -1119,7 +1123,12 @@ function openFacultyModal(mode, idx) {
         if (!dateSel) return;
         const prev = dateSel.value;
         const opts = getAllowedDatesForFaculty(fShortEl.value.trim());
-        dateSel.innerHTML = '<option value="">(select date)</option>' + opts.map(d=>`<option value="${d}">${d}</option>`).join('');
+        dateSel.innerHTML = '<option value="">(select date)</option>' +
+          opts.map(d => {
+            const dt = new Date(d + 'T00:00:00');
+            const label = `${d} (${WEEKDAYS[dt.getDay()]})`;
+            return `<option value="${d}">${label}</option>`;
+          }).join('');
         if (opts.includes(prev)) dateSel.value = prev; else dateSel.value = '';
         // trigger change to refresh slots
         const evt = new Event('change'); dateSel.dispatchEvent(evt);
@@ -1319,6 +1328,7 @@ document.getElementById('reset-btn').addEventListener('click',()=>{
 // TIMETABLE GENERATION
 const COURSE_PALETTE = ['#4f8ef7','#4caf7d','#c4953a','#9b6af5','#e07d3a','#e05252','#2aa3b8','#b84585'];
 let _courseColorMap = {};
+const TTView = {mode: 'section'}; // section | course | faculty
 
 function getCourseColor(code) {
   if(!_courseColorMap[code]) {
@@ -1411,6 +1421,17 @@ async function generateTimetable() {
     toast('Request failed. Is the server running?','error');
     console.error(e);
   }
+}
+
+function switchTTView(mode, el){
+  TTView.mode = mode;
+
+  Object.values(ActiveFilters).forEach(set => set.clear());
+
+  document.querySelectorAll('.tt-tab').forEach(b => b.classList.remove('active'));
+  el.classList.add('active');
+
+  refreshTimetableTab();
 }
 
 function refreshTimetableTab() {
@@ -1548,8 +1569,30 @@ function filterThHTML(key, label, stickyClass = '') {
   </th>`;
 }
 
+function getTTColumns(tt){
+  if(TTView.mode === 'section'){
+    return [...new Set(tt.map(r => r.section))].sort();
+  }
+
+  if(TTView.mode === 'course'){
+    return [...new Set(tt.map(r => r.courseCode))].sort();
+  }
+
+  if(TTView.mode === 'faculty'){
+    return [...new Set(tt.map(r => r.faculty))].sort();
+  }
+
+  return [];
+}
+
+function getCellKey(row){
+  if(TTView.mode === 'section') return row.section;
+  if(TTView.mode === 'course') return row.courseCode;
+  if(TTView.mode === 'faculty') return row.faculty;
+}
+
 function populateFilters(tt) {
-  const allSections = [...new Set(tt.map(r => r.section))].sort();
+  const allCols = getTTColumns(tt);
 
   // Init filters on first call
   const rowFields = {
@@ -1560,17 +1603,28 @@ function populateFilters(tt) {
   Object.entries(rowFields).forEach(([key, vals]) => {
     if (ActiveFilters[key].size === 0) vals.forEach(v => ActiveFilters[key].add(v));
   });
-  if (ActiveFilters.section.size === 0) allSections.forEach(s => ActiveFilters.section.add(s));
+  if (ActiveFilters.section.size === 0) {
+    if (TTView.mode === 'section') {
+      allCols.forEach(s => ActiveFilters.section.add(s));
+    } else {
+      // course / faculty → only first column selected
+      if (allCols.length) {
+        ActiveFilters.section.add(allCols[0]);
+      }
+    }
+  }
 
   // Build 2-row thead
-  const visibleSections = allSections.filter(s => ActiveFilters.section.has(s));
-  const sectionOptsHTML = allSections.map(s => `
+  const visibleSections = allCols.filter(s => ActiveFilters.section.has(s));
+  const sectionOptsHTML = allCols.map(s => `
     <label>
       <input type="checkbox" value="${s}" ${ActiveFilters.section.has(s) ? 'checked' : ''}
         onchange="toggleFilterValue('section', this)">
       ${s}
     </label>`).join('');
-
+  const labelMap = {
+    section: TTView.mode === 'section' ? isAreaMode() ? 'Areas' : 'Sections' : TTView.mode === 'course' ? 'Courses' : 'Faculty'
+  };
   document.getElementById('tt-thead').innerHTML = `
     <tr>
       ${filterThHTML('date', 'Date', 'tt-sticky-0')}
@@ -1578,10 +1632,10 @@ function populateFilters(tt) {
       ${filterThHTML('time', 'Time', 'tt-sticky-2')}
       <th colspan="${visibleSections.length}" style="text-align:center;padding:.5rem">
         <div class="filter" id="filter-section">
-          <div class="filter-btn" onclick="toggleFilter('section')">${isAreaMode() ? 'Areas' : 'Sections'} ⌄</div>
+          <div class="filter-btn" onclick="toggleFilter('section')">${labelMap.section} ⌄</div>
           <div class="filter-dropdown">
             <input type="text" placeholder="Search..." oninput="filterSearch('section', this.value)">
-            <label><input type="checkbox" ${ActiveFilters.section.size === allSections.length ? 'checked' : ''} onchange="toggleAll('section', this)"> All</label>
+            <label><input type="checkbox" ${ActiveFilters.section.size === allCols.length ? 'checked' : ''} onchange="toggleAll('section', this)"> All</label>
             <div class="filter-options" id="opts-section">${sectionOptsHTML}</div>
           </div>
         </div>
@@ -1638,8 +1692,8 @@ function renderTimetableRows() {
   );
 
   // 2. Visible sections (respects section filter)
-  const allSections = [...new Set(tt.map(r => r.section))].sort();
-  const sections = allSections.filter(s => !ActiveFilters.section.size || ActiveFilters.section.has(s));
+  const allCols = getTTColumns(tt);
+  const sections = allCols.filter(s => !ActiveFilters.section.size || ActiveFilters.section.has(s));
 
   // Sync second thead row and Sections colspan
   const thead = document.getElementById('tt-thead');
@@ -1670,17 +1724,19 @@ function renderTimetableRows() {
     const dk = `${r.date}||${r.day}`;
     if (!dateGroups.has(dk)) dateGroups.set(dk, { date: r.date, day: r.day, times: new Map() });
     const tm = dateGroups.get(dk).times;
+    const key = getCellKey(r);
     if (!tm.has(r.timeLabel)) tm.set(r.timeLabel, {});
     // Allow multiple sessions per section cell (area-mode may produce parallel sessions)
     const cellMap = tm.get(r.timeLabel);
-    if (!cellMap[r.section]) cellMap[r.section] = [];
-    cellMap[r.section].push(r);
+    if (!cellMap[key]) cellMap[key] = [];
+    cellMap[key].push(r);
   });
 
   // 5. Remove time slots where ALL visible sections are empty
   for (const [dk, group] of dateGroups) {
     for (const [tl, sessMap] of group.times) {
-      if (!sections.some(s => sessMap[s])) group.times.delete(tl);
+      const hasAny = sections.some(s => sessMap[s] && sessMap[s].length);
+      if (!hasAny) group.times.delete(tl);
     }
     if (group.times.size === 0) dateGroups.delete(dk);
   }
@@ -1706,11 +1762,28 @@ function renderTimetableRows() {
         // cell is an array of one or more sessions
         const first = cell[0];
         const col = getCourseColor(first.courseCode);
-        const courseLabel = cell.map(x => x.courseShort || x.courseCode).join(' / ');
-        const facultyLabel = cell.map(x => x.facultyShort || x.faculty).join(' / ');
+        let line1 = '';
+        let line2 = '';
+        if (TTView.mode === 'section') {
+          line1 = cell.map(x => x.courseShort || x.courseCode).join(' / ');
+          line2 = cell.map(x => x.facultyShort || x.faculty).join(' / ');
+        }
+        else if (TTView.mode === 'course') {
+          line1 = cell.map(x => x.section).join(' / ');
+          line2 = cell.map(x => x.facultyShort || x.faculty).join(' / ');
+        }
+        else if (TTView.mode === 'faculty') {
+          line1 = cell.map(x => x.courseShort || x.courseCode).join(' / ');
+          line2 = cell.map(x => x.section).join(' / ');
+        }
         return `<td style="text-align:center">
-          <span class="course-chip" style="background:${col}22;color:${col};border:1px solid ${col}44">${courseLabel}</span>
-          <span style="color:var(--text2);font-size:.75rem;display:block;margin-top:.2rem">${facultyLabel}</span>
+          <span class="course-chip"
+                style="background:${col}22;color:${col};border:1px solid ${col}44">
+            ${line1}
+          </span>
+          <span style="color:var(--text2);font-size:.75rem;display:block;margin-top:.2rem">
+            ${line2}
+          </span>
         </td>`;
       });
 
@@ -2425,7 +2498,125 @@ function exportToExcel() {
   XLSX.writeFile(wb, fname);
   toast(`Exported → ${fname}`, 'success');
 }
- 
+
+function getVisibleColumns() {
+  const allCols = getTTColumns(State.timetable);
+
+  return allCols.filter(c =>
+    !ActiveFilters.section.size ||
+    ActiveFilters.section.has(c)
+  );
+}
+function exportVisibleTimetable() {
+
+  const tt = State.timetable;
+
+  if (!tt?.length) {
+    toast('No timetable available.', 'warning');
+    return;
+  }
+
+  const columns = getVisibleColumns();
+
+  const filtered = tt.filter(r =>
+    (!ActiveFilters.date.size || ActiveFilters.date.has(r.date)) &&
+    (!ActiveFilters.day.size  || ActiveFilters.day.has(r.day)) &&
+    (!ActiveFilters.time.size || ActiveFilters.time.has(r.timeLabel))
+  );
+
+  const pivotMap = new Map();
+
+  filtered.forEach(r => {
+
+    const key =
+      `${r.date}||${r.day}||${r.timeLabel}`;
+
+    if (!pivotMap.has(key)) {
+      pivotMap.set(key,{
+        date:r.date,
+        day:r.day,
+        time:r.timeLabel,
+        cells:{}
+      });
+    }
+
+    const columnKey = getCellKey(r);
+
+    let value = '';
+
+    if (TTView.mode === 'section') {
+      value =
+        `${r.courseShort || r.courseCode} (${r.facultyShort || r.faculty})`;
+    }
+
+    else if (TTView.mode === 'course') {
+      value =
+        `${r.section} (${r.facultyShort || r.faculty})`;
+    }
+
+    else {
+      value =
+        `${r.courseShort || r.courseCode} (${r.section})`;
+    }
+
+    const row = pivotMap.get(key);
+
+    if (!row.cells[columnKey]) {
+      row.cells[columnKey] = [];
+    }
+
+    row.cells[columnKey].push(value);
+  });
+
+  const rows = [...pivotMap.values()].filter(r =>
+    columns.some(c =>
+      r.cells[c] && r.cells[c].length
+    )
+  ).sort(
+    (a,b) =>
+      a.date.localeCompare(b.date) ||
+      a.time.localeCompare(b.time)
+  );
+
+  const header = ['Date', 'Day', 'Time', ...columns];
+
+  const aoa = [
+    header,
+    ...rows.map(r => [
+      r.date,
+      r.day,
+      r.time,
+      ...columns.map(c =>
+        r.cells[c]
+          ? r.cells[c].join(' / ')
+          : ''
+      )
+    ])
+  ];
+
+  const wb = XLSX.utils.book_new();
+
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+
+  ws['!cols'] = [{ wch: 12 }, { wch: 12 }, { wch: 16 }, ...columns.map(() => ({ wch: 20 }))];
+
+  ws['!freeze'] = {xSplit: 0, ySplit: 1};
+
+  XLSX.utils.book_append_sheet(wb, ws, 'Timetable');
+
+  const modeLabel =
+    TTView.mode === 'section'
+      ? isAreaMode() ? 'Areas' : 'Sections'
+      : TTView.mode === 'course' ? 'Courses' : 'Faculty';
+
+  XLSX.writeFile(
+    wb,
+    `Timetable_${modeLabel}_${new Date().toISOString().slice(0,10)}.xlsx`
+  );
+
+  toast('Timetable exported.', 'success');
+}
+
 // IMPORT — Reads .xlsx, parses each sheet, stores to localStorage
 function importFromExcel(file) {
   const reader = new FileReader();

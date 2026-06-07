@@ -357,6 +357,26 @@ header{
 .rule-list li::before{content:'—';color:var(--gold);position:absolute;left:0;top:.5rem;}
 
 /* TIMETABLE */
+.tt-subtabs{
+  display:flex;
+  gap:.5rem;
+  margin: .75rem 0 1rem;
+  flex-wrap:wrap;
+}
+.tt-tab{
+  padding:.35rem .8rem;
+  border:1px solid var(--border);
+  background:var(--surface);
+  color:var(--text2);
+  border-radius:20px;
+  font-size:.78rem;
+  cursor:pointer;
+}
+.tt-tab.active{
+  background:var(--gold-dim);
+  border-color:var(--gold);
+  color:var(--gold-light);
+}
 .meta-card{
   background:var(--card);border:1px solid var(--border);border-radius:var(--rl);
   padding:1.1rem 1.5rem;margin-bottom:1.25rem;

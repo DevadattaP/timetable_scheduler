@@ -65,6 +65,7 @@
           <li>If the Consecutive Sessions Rule is enabled, the solver minimizes consecutive-period violations using a <strong>Soft Penalty Objective</strong>.</li>
           <li>The generated timetable can be verified against all configured constraints.</li>
           <li>You can export both configuration and timetable to Excel for backup or offline editing.</li>
+          <li>The timetable can be viewed and exported in various formats: section/area wise, course wise, or faculty wise.</li>
         </ul>
       </div>
       <div class="card">
@@ -323,6 +324,11 @@
 <div id="tab-timetable" class="tab-content">
   <div class="section-header">
     <div><h2>Timetable</h2><p>Generate and verify the optimized schedule</p></div>
+    <div class="tt-subtabs">
+      <button class="tt-tab active" onclick="switchTTView('section', this)">Sections / Areas</button>
+      <button class="tt-tab" onclick="switchTTView('course', this)">Courses</button>
+      <button class="tt-tab" onclick="switchTTView('faculty', this)">Faculty</button>
+    </div>
   </div>
 
   <div id="tt-meta-card" class="meta-card" style="display:none">
@@ -342,6 +348,7 @@
   <div class="timetable-actions">
     <button class="btn btn-primary btn-lg" id="generate-btn" onclick="generateTimetable()">⚡ Generate Timetable</button>
     <button class="btn btn-blue btn-lg" id="verify-btn" onclick="verifyTimetable()" style="display:none">✓ Verify Timetable</button>
+    <button class="btn btn-green btn-lg" onclick="exportVisibleTimetable()">📊 Export View</button>
   </div>
 
   <div id="tt-table-wrap" style="display:none">
