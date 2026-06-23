@@ -12,8 +12,29 @@ const get = k => { try{ return JSON.parse(localStorage.getItem(k)) }catch{ retur
 const set = (k,v) => localStorage.setItem(k, JSON.stringify(v));
 const remove = k => localStorage.removeItem(k);
 
+function utcNowIso() {
+  return new Date().toISOString();
+}
+
+function normalizeTimestamp(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '' : date.toISOString();
+}
+
+function timestampMs(value) {
+  const normalized = normalizeTimestamp(value);
+  return normalized ? Date.parse(normalized) : NaN;
+}
+
+function isConfigNewerThanTimetable(configEdit, timetableTimestamp) {
+  const configTime = timestampMs(configEdit);
+  const timetableTime = timestampMs(timetableTimestamp);
+  return Number.isFinite(configTime) && Number.isFinite(timetableTime) && configTime > timetableTime;
+}
+
 function touchConfig() {
-  set(KEY.configEdit, new Date().toISOString());
+  set(KEY.configEdit, utcNowIso());
   updateStaleWarning();
 }
 
@@ -1448,7 +1469,7 @@ async function generateTimetable() {
     State.timetable = data.timetable;
     State.timetableMeta = {
       status: data.status,
-      timestamp: data.timestamp,
+      timestamp: normalizeTimestamp(data.timestamp) || utcNowIso(),
       constraintType: data.constraint_type,
       penalty: data.penalty,
     };
@@ -1494,7 +1515,7 @@ function refreshTimetableTab() {
   verifyBtn.style.display='inline-flex';
   exportViewBtn.style.display='inline-flex';
 
-  const ts = new Date(meta.timestamp);
+  const ts = new Date(normalizeTimestamp(meta.timestamp));
   document.getElementById('tt-meta-time').textContent = ts.toLocaleString();
   document.getElementById('tt-meta-status').textContent = meta.status;
   document.getElementById('tt-meta-type').innerHTML = meta.constraintType==='hard'
@@ -1506,7 +1527,7 @@ function refreshTimetableTab() {
 
   // stale check
   const configEdit = get(KEY.configEdit);
-  const stale = configEdit && new Date(configEdit)>new Date(meta.timestamp);
+  const stale = isConfigNewerThanTimetable(configEdit, meta.timestamp);
   document.getElementById('tt-stale-warn').style.display = stale?'flex':'none';
 
   // build color map
@@ -1845,7 +1866,7 @@ function updateStaleWarning() {
   const meta = State.timetableMeta;
   if(!meta) return;
   const configEdit = get(KEY.configEdit);
-  const stale = configEdit && new Date(configEdit)>new Date(meta.timestamp);
+  const stale = isConfigNewerThanTimetable(configEdit, meta.timestamp);
   const el = document.getElementById('tt-stale-warn');
   if(el) el.style.display = stale?'flex':'none';
 }
@@ -2930,7 +2951,7 @@ function importFromExcel(file) {
             const key = String(r['Day'] || '').trim();
             const val = String(r['From Time'] || '').trim();
             if (key === 'Status') meta.status = val;
-            if (key === 'Generated At') meta.timestamp = val;
+            if (key === 'Generated At') meta.timestamp = normalizeTimestamp(val) || val;
             if (key === 'Constraint')   meta.constraintType = val;
             if (key === 'Penalty')      meta.penalty = val;
             return;
@@ -2980,7 +3001,7 @@ function importFromExcel(file) {
 
         State.timetableMeta = Object.keys(meta).length ? meta : {
           status: 'imported',
-          timestamp: new Date().toISOString(),
+          timestamp: utcNowIso(),
           constraintType: 'imported',
           penalty: '?'
         };

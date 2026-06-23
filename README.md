@@ -66,6 +66,12 @@ As a Business Analyst, we formulate this as a mathematical optimization problem 
 
    The application will be available at [`http://localhost:5000`.](http://localhost:5000/)
 
+   For production deployment, you can use Gunicorn:
+
+   ```bash
+   gunicorn app:app
+   ```
+
 ## Features
 
 - Flask web application with a user-friendly interface to configure and generate timetables.

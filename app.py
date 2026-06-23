@@ -6,7 +6,7 @@ Install: pip install flask pulp pandas
 """
 
 from flask import Flask, jsonify, request, render_template
-from datetime import datetime
+from datetime import datetime, timezone
 from scheduler import run_solver, verify_timetable
 
 app = Flask(__name__)
@@ -24,7 +24,7 @@ def solve():
         return jsonify({"status": "error", "message": "No data received"}), 400
     try:
         result = run_solver(data)
-        result["timestamp"] = datetime.now().isoformat()
+        result["timestamp"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         return jsonify(result)
     except Exception as e:
         import traceback
