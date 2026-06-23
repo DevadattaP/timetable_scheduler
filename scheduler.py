@@ -290,6 +290,78 @@ def _solve(data):
                     "timetable": [],
                 }
 
+    def _is_faculty_unavailable(f, d, ft):
+        fac_map = unavail.get(f, {})
+        if d not in fac_map:
+            return False
+        return None in fac_map[d] or ft in fac_map[d]
+
+    # Section-mode capacity check after H6.
+    # A section slot is usable if at least one mapped course/faculty for that section
+    # can be scheduled in that date+fromTime.
+    if apply_unavail and not area_mode:
+        courses_by_section = defaultdict(list)
+        for (b, c), f in faculty_map.items():
+            courses_by_section[b].append((c, f))
+        messages = []
+        for b in bucket_names:
+            required_sessions = sum(
+                req
+                for (bucket, _course), req in required.items()
+                if bucket == b
+            )
+
+            usable_slots = 0
+            blocked_slots = []
+
+            for t in range(n_slots[b]):
+                d = date_of(b, t)
+                ft = ft_of(b, t)
+
+                has_available_faculty = any(
+                    not _is_faculty_unavailable(f, d, ft)
+                    for _c, f in courses_by_section[b]
+                )
+
+                if has_available_faculty:
+                    usable_slots += 1
+                else:
+                    blocked_slots.append(slot_info[(b, t)])
+
+            if usable_slots < required_sessions:
+                slots = ", ".join(
+                    f"{sl['date']} {sl['from_time']}-{sl['to_time']}"
+                    for sl in blocked_slots
+                )
+
+                messages.append(
+                        f"Section {b}: {required_sessions} sessions required, but only "
+                        f"{usable_slots} usable slots remain after faculty unavailability. "
+                        f"Fully blocked slots: {slots}"
+                    )
+    
+        for (b, c), req in required.items():
+            f = faculty_map[(b, c)]
+            available_dates = {
+                date_of(b, t)
+                for t in range(n_slots[b])
+                if not _is_faculty_unavailable(f, date_of(b, t), ft_of(b, t))
+            }
+            if len(available_dates) < req:
+                messages.append(
+                        f"{'Section' if not area_mode else 'Area'} {b}: Course {c}: Faculty {f}: {req} sessions required, but only "
+                        f"{len(available_dates)} available teaching dates remain after faculty unavailability. "
+                        "\nA course can be scheduled at most once per section per day."
+                    )
+        if messages:
+            return {
+                "status": "error",
+                "constraint_type": "soft" if consec_enabled else "hard",
+                "penalty": None,
+                "timetable": [],
+                "message": '\n'.join(messages),
+            }
+
     def _pk(d):
         if period_unit == "weeks":
             iso = d.isocalendar()
@@ -455,15 +527,8 @@ def _solve(data):
                 for t in range(n_slots[b]):
                     d = date_of(b, t)
                     ft = ft_of(b, t)
-                    fac_map = unavail.get(f, {})
-                    if d in fac_map:
-                        # whole-day block
-                        if None in fac_map[d]:
-                            prob += x[(b, c, t)] == 0
-                            continue
-                        # specific slot times (match on from_time)
-                        if ft in fac_map[d]:
-                            prob += x[(b, c, t)] == 0
+                    if _is_faculty_unavailable(f, d, ft):
+                        prob += x[(b, c, t)] == 0
 
     if apply_conflicts:
         for group in data.get("courseConflicts", []):
@@ -502,9 +567,18 @@ def _solve(data):
     prob.solve(solver)
 
     status_str = pulp.LpStatus[prob.status]
-    if status_str not in ("Optimal", "Feasible", "Infeasible"):
+    if status_str == "Infeasible":
         return {
-            "status": "infeasible",
+            "status": "Infeasible",
+            "constraint_type": "soft" if consec_enabled else "hard",
+            "penalty": None,
+            "timetable": [],
+            "message": "No feasible timetable found — even with soft constraints. \n Check your configuration (slots, required sessions, faculty availability, conflict groups).",
+        }
+
+    if status_str not in ("Optimal", "Feasible"):
+        return {
+            "status": "error",
             "constraint_type": "soft" if consec_enabled else "hard",
             "penalty": None,
             "timetable": [],
@@ -537,7 +611,7 @@ def _solve(data):
     penalty = int(objective_value or 0) if consec_enabled else 0
 
     return {
-        "status": "optimal",
+        "status": "Optimal" if penalty == 0 else "Feasible",
         "constraint_type": "soft" if consec_enabled else "hard",
         "penalty": penalty,
         "timetable": timetable,

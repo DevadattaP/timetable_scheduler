@@ -558,6 +558,10 @@ tr:hover td.tt-sticky-2 {
   padding:.65rem 1rem;font-size:.82rem;min-width:220px;max-width:340px;
   box-shadow:var(--sh);animation:fadeIn .2s ease;
   display:flex;align-items:center;gap:.5rem;
+  transition: transform .15s ease;
+}
+.toast:hover{
+  transform: translateY(-2px);
 }
 .toast.success{border-color:var(--green);color:var(--green)}
 .toast.error{border-color:var(--red);color:var(--red)}

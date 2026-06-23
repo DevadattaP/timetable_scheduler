@@ -333,9 +333,10 @@
 
   <div id="tt-meta-card" class="meta-card" style="display:none">
     <div class="meta-info">
+      <div class="meta-item"><label>Status</label><span id="tt-meta-status">—</span></div>
       <div class="meta-item"><label>Generated</label><span id="tt-meta-time">—</span></div>
       <div class="meta-item"><label>Constraint Type</label><span id="tt-meta-type">—</span></div>
-      <div class="meta-item"><label>Penalty Score</label><span id="tt-meta-penalty">—</span></div>
+      <div class="meta-item"><label>Soft Constraint Penalty</label><span id="tt-meta-penalty">—</span></div>
       <div class="meta-item"><label>Total Sessions</label><span id="tt-meta-total">—</span></div>
     </div>
     <div id="tt-stale-warn" class="stale-warn" style="display:none">⚠ Config changed — regenerate for latest schedule</div>
@@ -348,7 +349,7 @@
   <div class="timetable-actions">
     <button class="btn btn-primary btn-lg" id="generate-btn" onclick="generateTimetable()">⚡ Generate Timetable</button>
     <button class="btn btn-blue btn-lg" id="verify-btn" onclick="verifyTimetable()" style="display:none">✓ Verify Timetable</button>
-    <button class="btn btn-green btn-lg" onclick="exportVisibleTimetable()">📊 Export View</button>
+    <button class="btn btn-green btn-lg" id="export-view-btn" onclick="exportVisibleTimetable()">📊 Export View</button>
   </div>
 
   <div id="tt-table-wrap" style="display:none">

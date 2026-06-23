@@ -127,10 +127,50 @@ function toast(msg, type='info') {
   const c = document.getElementById('toast-container');
   const el = document.createElement('div');
   el.className = `toast ${type}`;
-  const icons = {success:'✓', error:'✕', warning:'⚠', info:'ℹ'};
-  el.innerHTML = `<span>${icons[type]||'ℹ'}</span><span>${msg}</span>`;
+
+  const icons = {
+    success:'✓',
+    error:'✕',
+    warning:'⚠',
+    info:'ⓘ',
+  };
+  const duration = {
+    success: 2000,
+    error: 5000,
+    warning: 3000,
+    info: 2000,
+  }
+
+  el.innerHTML = `
+    <span>${icons[type] || 'ⓘ'}</span>
+    <span>${msg}</span>
+  `;
+
   c.appendChild(el);
-  setTimeout(() => { el.style.animation='fadeOut .25s ease forwards'; setTimeout(()=>el.remove(),250); }, 3000);
+
+  let startTime = Date.now();
+  let remaining = duration[type];
+  let timeoutId;
+
+  function dismiss() {
+    el.style.animation = 'fadeOut .25s ease forwards';
+    setTimeout(() => el.remove(), 250);
+  }
+
+  function startTimer() {
+    startTime = Date.now();
+    timeoutId = setTimeout(dismiss, remaining);
+  }
+
+  function pauseTimer() {
+    clearTimeout(timeoutId);
+    remaining -= Date.now() - startTime;
+  }
+
+  el.addEventListener('mouseenter', pauseTimer);
+  el.addEventListener('mouseleave', startTimer);
+
+  startTimer();
 }
 
 // TABS
@@ -1399,14 +1439,15 @@ async function generateTimetable() {
     const data = await res.json();
     clearInterval(timer); btn.disabled=false; btn.innerHTML='⚡ Generate Timetable';
     if(data.status==='error'){
-      toast('Error: '+data.message,'error'); return;
+      toast('Error: '+data.message.replace(/\n/g, '<br/>'),'error'); return;
     }
-    if(data.status==='infeasible'){
-      toast('No feasible timetable found — even with soft constraints. Check your configuration (slots, required sessions, faculty availability, conflict groups).','error');
+    if(data.status==='Infeasible'){
+      toast(data.message.replace(/\n/g, '<br/>'),'error');
       return;
     }
     State.timetable = data.timetable;
     State.timetableMeta = {
+      status: data.status,
       timestamp: data.timestamp,
       constraintType: data.constraint_type,
       penalty: data.penalty,
@@ -1415,7 +1456,7 @@ async function generateTimetable() {
     set(KEY.timetableMeta, State.timetableMeta);
     document.getElementById('verify-results').style.display='none';
     refreshTimetableTab();
-    toast(`Timetable generated! Constraint: ${data.constraint_type}${data.penalty>0?' | Penalty: '+data.penalty:''}`, 'success');
+      toast(`Timetable generated! Constraint: ${data.constraint_type}${data.penalty>0?' | Penalty: '+data.penalty:''}`, 'success');
   } catch(e) {
     clearInterval(timer); btn.disabled=false; btn.innerHTML='⚡ Generate Timetable';
     toast('Request failed. Is the server running?','error');
@@ -1440,18 +1481,22 @@ function refreshTimetableTab() {
   const noTT = document.getElementById('tt-no-timetable');
   const metaCard = document.getElementById('tt-meta-card');
   const verifyBtn = document.getElementById('verify-btn');
+  const exportViewBtn = document.getElementById('export-view-btn');
 
   if(!tt||!tt.length){
     noTT.style.display='block'; metaCard.style.display='none';
     document.getElementById('tt-table-wrap').style.display='none';
     verifyBtn.style.display='none';
+    exportViewBtn.style.display='none';
     return;
   }
   noTT.style.display='none'; metaCard.style.display='flex';
   verifyBtn.style.display='inline-flex';
+  exportViewBtn.style.display='inline-flex';
 
   const ts = new Date(meta.timestamp);
   document.getElementById('tt-meta-time').textContent = ts.toLocaleString();
+  document.getElementById('tt-meta-status').textContent = meta.status;
   document.getElementById('tt-meta-type').innerHTML = meta.constraintType==='hard'
     ? '<span class="badge badge-grey">No consecutive rule</span>'
     : '<span class="badge badge-blue">Soft (penalty minimized)</span>';
@@ -1832,7 +1877,8 @@ function renderVerification(data) {
   wrap.scrollIntoView({behavior:'smooth', block:'start'});
 
   // stat cards
-  const sessionViol = data.sessionCount.length;
+  const sessionViol = data.sessionCount.reduce((sum, r) => sum + r.scheduled, 0);
+  const requiredSessionCount = data.sessionCount.reduce((sum, r) => sum + r.required, 0);
   const slotViol = data.slotAssignmentViolations.length;
   const loadViol = data.facultyLoad.length;
   const consec = data.totalPenalty;
@@ -1842,7 +1888,7 @@ function renderVerification(data) {
   const conflict = data.conflictViolations.length;
 
   const stats = [
-    {val:sessionViol===0?'✓':sessionViol, label:'Session Count', cls:sessionViol===0?'ok':'fail'},
+    {val:sessionViol===0?'✓':`${sessionViol} / ${requiredSessionCount}`, label:'Session Count', cls:sessionViol===0?'ok':'fail'},
     {val:loadViol===0?'✓':loadViol, label:'Load Violations', cls:loadViol===0?'ok':'fail'},
     {val:slotViol===0?'✓':slotViol, label:'Slot Violations', cls:slotViol===0?'ok':'fail'},
     {val:clone===0?'✓':clone, label:'Cloning Violations', cls:clone===0?'ok':'fail'},
@@ -2484,6 +2530,7 @@ function exportToExcel() {
       const lastRow = ttRows.length + 3;
       XLSX.utils.sheet_add_aoa(wsTT, [
         [],
+        ['__META__', 'Status', meta.status],
         ['__META__', 'Generated At', meta.timestamp],
         ['__META__', 'Constraint', meta.constraintType],
         ['__META__', 'Penalty', meta.penalty],
@@ -2882,6 +2929,7 @@ function importFromExcel(file) {
           if (String(r['Date'] || '').trim() === '__META__') {
             const key = String(r['Day'] || '').trim();
             const val = String(r['From Time'] || '').trim();
+            if (key === 'Status') meta.status = val;
             if (key === 'Generated At') meta.timestamp = val;
             if (key === 'Constraint')   meta.constraintType = val;
             if (key === 'Penalty')      meta.penalty = val;
@@ -2931,6 +2979,7 @@ function importFromExcel(file) {
         set(KEY.timetable, State.timetable);
 
         State.timetableMeta = Object.keys(meta).length ? meta : {
+          status: 'imported',
           timestamp: new Date().toISOString(),
           constraintType: 'imported',
           penalty: '?'
