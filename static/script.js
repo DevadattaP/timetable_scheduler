@@ -57,22 +57,6 @@ function loadState() {
   State.timetableMeta = get(KEY.timetableMeta) || null;
   State.courseConflicts = get(KEY.conflicts) || [];
   State.constraintConfig = get(KEY.constraintConfig) || defaultConstraintConfig();
-  // Normalize faculty entries for backward compatibility
-  if (Array.isArray(State.faculty)) {
-    State.faculty = State.faculty.map(f => {
-      const nf = Object.assign({}, f);
-      if (!Array.isArray(nf.unavailableSlots)) {
-        if (Array.isArray(nf.unavailableDates)) {
-          nf.unavailableSlots = nf.unavailableDates.map(d => ({date: d, fromTime: '', toTime: ''}));
-          delete nf.unavailableDates;
-        } else {
-          nf.unavailableSlots = [];
-        }
-      }
-      return nf;
-    });
-    set(KEY.faculty, State.faculty);
-  }
 }
 
 function saveSection()  { set(KEY.sections, State.sections); touchConfig(); }
@@ -1450,8 +1434,19 @@ async function generateTimetable() {
   if(errs.length){ toast(errs[0],'error'); return; }
   const btn = document.getElementById('generate-btn');
   btn.disabled = true;
+  btn.innerHTML = `
+    <span class="spinner"></span>
+    <span>Solving… <span id="elapsed">0</span>s</span>
+  `;
+
+  const elapsedEl = btn.querySelector("#elapsed");
+
   let elapsed = 0;
-  const timer = setInterval(()=>{ elapsed++; btn.innerHTML=`<span class="spinner"></span> Solving… ${elapsed}s`; },1000);
+  const timer = setInterval(() => {
+      elapsed++;
+      elapsedEl.textContent = elapsed;
+  }, 1000);
+  
   try {
     const res = await fetch('/api/solve',{
       method:'POST', headers:{'Content-Type':'application/json'},
@@ -1522,7 +1517,7 @@ function refreshTimetableTab() {
     ? '<span class="badge badge-grey">No consecutive rule</span>'
     : '<span class="badge badge-blue">Soft (penalty minimized)</span>';
   document.getElementById('tt-meta-penalty').textContent =
-    meta.constraintType==='hard' ? 'N/A' : meta.penalty+' violation'+(meta.penalty!==1?'s':'');
+    meta.constraintType==='hard' ? 'N/A' : meta.penalty+' penalty score';
   document.getElementById('tt-meta-total').textContent = tt.length+' sessions';
 
   // stale check
@@ -1902,11 +1897,12 @@ function renderVerification(data) {
   const requiredSessionCount = data.sessionCount.reduce((sum, r) => sum + r.required, 0);
   const slotViol = data.slotAssignmentViolations.length;
   const loadViol = data.facultyLoad.length;
-  const consec = data.totalPenalty;
+  const consec = data.consecutiveViolationsPenalty;
   const clone = data.cloneViolations.length;
   const spacing = data.spacingViolations.length;
   const unavail = data.unavailViolations.length;
   const conflict = data.conflictViolations.length;
+  const spread = data.spreadingViolationsPenalty;
 
   const stats = [
     {val:sessionViol===0?'✓':`${sessionViol} / ${requiredSessionCount}`, label:'Session Count', cls:sessionViol===0?'ok':'fail'},
@@ -1923,6 +1919,9 @@ function renderVerification(data) {
   }
   if (State.constraintConfig.consecutiveRule.enabled){
     stats.push({val:consec===0?'✓':consec, label:'Consecutive Violations', cls:consec===0?'ok':'fail'});
+  }
+  if (State.constraintConfig.spreadingRule.enabled){
+    stats.push({val:spread===0?'✓':spread, label:'Spreading Violations', cls:spread===0?'ok':'fail'});
   }
   document.getElementById('verify-stats').innerHTML = stats.map(s=>`<div class="verify-stat ${s.cls}">
     <div class="vs-val">${s.val}</div>
@@ -2303,6 +2302,10 @@ function defaultConstraintConfig() {
       periodUnit: 'weeks',
       resetBoundary: 'month',
     },
+    spreadingRule: {
+      enabled: true,
+      weight: 0.1,
+    },
   };
 }
 
@@ -2314,10 +2317,17 @@ function applyConstraintConfigToUI(cfg) {
   document.getElementById('c-consec-unit').value         = cfg.consecutiveRule.periodUnit;
   document.getElementById('c-consec-boundary').value     = cfg.consecutiveRule.resetBoundary;
   toggleConsecDetail(cfg.consecutiveRule.enabled);
+  document.getElementById('c-spread-enabled').checked      = cfg.spreadingRule.enabled;
+  document.getElementById('c-spread-weight').value         = cfg.spreadingRule.weight;
+  toggleSpreadDetail(cfg.spreadingRule.enabled);
 }
 
 function toggleConsecDetail(enabled) {
   document.getElementById('c-consec-detail').style.display = enabled ? 'block' : 'none';
+}
+
+function toggleSpreadDetail(enabled) {
+  document.getElementById('c-spread-detail').style.display = enabled ? 'block' : 'none';
 }
 
 function saveConstraintConfig() {
@@ -2329,6 +2339,10 @@ function saveConstraintConfig() {
       maxConsecutive: parseInt(document.getElementById('c-consec-max').value) || 2,
       periodUnit:     document.getElementById('c-consec-unit').value,
       resetBoundary:  document.getElementById('c-consec-boundary').value,
+    },
+    spreadingRule: {
+      enabled: document.getElementById('c-spread-enabled').checked,
+      weight: parseFloat(document.getElementById('c-spread-weight').value) || 0.1,
     },
   };
   State.constraintConfig = cfg;
@@ -2359,6 +2373,7 @@ function init() {
   refreshTimetableTab();
   applyConstraintConfigToUI(State.constraintConfig);
   document.getElementById('c-consec-enabled').addEventListener('change', e => toggleConsecDetail(e.target.checked));
+  document.getElementById('c-spread-enabled').addEventListener('change', e => toggleSpreadDetail(e.target.checked));
 
   // Modal buttons
   const modalClose = document.getElementById('modal-close');
@@ -2507,6 +2522,8 @@ function exportToExcel() {
     ['consecutiveRule.maxConsecutive', ccfg.consecutiveRule.maxConsecutive],
     ['consecutiveRule.periodUnit',     ccfg.consecutiveRule.periodUnit],
     ['consecutiveRule.resetBoundary',  ccfg.consecutiveRule.resetBoundary],
+    ['spreadingRule.enabled',          ccfg.spreadingRule.enabled],
+    ['spreadingRule.weight',           ccfg.spreadingRule.weight],
   ];
   const wsConstraints = XLSX.utils.aoa_to_sheet([['Setting', 'Value'], ...csCfgRows]);
   setColWidths(wsConstraints, [34, 16]);
@@ -2919,6 +2936,10 @@ function importFromExcel(file) {
             maxConsecutive: parseInt(kv['consecutiveRule.maxConsecutive'])  || 2,
             periodUnit:     String(kv['consecutiveRule.periodUnit']  || 'weeks').trim(),
             resetBoundary:  String(kv['consecutiveRule.resetBoundary']|| 'month').trim(),
+          },
+          spreadingRule: {
+            enabled: _toBool(kv['spreadingRule.enabled'] ?? true),
+            weight:  parseFloat(kv['spreadingRule.weight']) || 0.1,
           },
         };
         State.constraintConfig = importedConstraints;

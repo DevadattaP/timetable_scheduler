@@ -76,8 +76,6 @@
           <li><strong>Mappings:</strong> Sections mode uses section-course-faculty mappings, while Areas mode maps course to faculty only.</li>
         </ul>
       </div>
-    </div>
-    <div>
       <div class="card">
         <div class="card-title">🔒 Hard Constraints</div>
         <ul class="rule-list">
@@ -89,6 +87,8 @@
           <li><strong>Course conflicts (optional):</strong> Courses in specified groups cannot be scheduled at the same time.</li>
         </ul>
       </div>
+    </div>
+    <div>
       <div class="card">
         <div class="card-title">✨ Soft Constraint — Consecutive Sessions Rule</div>
         <ul class="rule-list">
@@ -133,6 +133,58 @@
             <strong>Example 2:</strong>
             If Max Consecutive = 1 Week with No Boundary, it works like an alternate week rule, and
             a penalty is triggered when the same course runs for 2+ consecutive weeks within the complete schedule.
+          </li>
+        </ul>
+      </div>
+      <div class="card">
+        <div class="card-title">✨ Soft Constraint — Session Spreading Rule</div>
+        <ul class="rule-list">
+          <li>
+            <strong>Even Distribution:</strong>
+            Encourages sessions for each course (and section, in sections mode) to be
+            spread uniformly across the full scheduling period rather than clustering
+            at the start, end, or around other constraints.
+          </li>
+
+          <li>
+            <strong>Epoch-Based Tracking:</strong>
+            The scheduling period is automatically divided into equal-length
+            <em>epochs</em> — one epoch per required session. Each epoch represents
+            the ideal window in which one session should fall.
+          </li>
+
+          <li>
+            <strong>Penalty-Based Optimization:</strong>
+            An empty epoch (one that receives no session) contributes one penalty point
+            to the LP objective. The solver minimizes total penalty while keeping all
+            hard constraints strictly enforced.
+          </li>
+
+          <li>
+            <strong>Penalty Weight:</strong>
+            The weight controls how aggressively spreading is prioritized relative to
+            other soft constraints such as the consecutive rule. A higher weight pushes
+            the solver to fill gaps more forcefully. Recommended range: 0.01 – 0.5.
+          </li>
+
+          <li>
+            <strong>Violation Definition:</strong>
+            A penalty is added for each epoch that ends up with zero sessions.
+            Over-filled epochs (more than one session) do not add a penalty —
+            only empty epochs are penalized.
+          </li>
+
+          <li>
+            <strong>Example 1:</strong>
+            A course requiring 4 sessions over a 16-week term creates 4 epochs of
+            4 weeks each. If sessions land in weeks 1, 2, 3, and 14 — epochs 0, 0, 0,
+            and 3 — then epochs 1 and 2 are empty, giving a penalty of 2.
+          </li>
+
+          <li>
+            <strong>Example 2:</strong>
+            Same course, sessions in weeks 2, 6, 11, and 15 — one per epoch —
+            gives a penalty of 0. This is the ideal outcome the solver aims for.
           </li>
         </ul>
       </div>
@@ -312,6 +364,41 @@
           </p>
         </div>
       </div>
+
+      <hr class="form-divider"/>
+
+      <div class="constraint-item">
+        <label class="constraint-toggle">
+          <input type="checkbox" id="c-spread-enabled"/>
+          <div>
+            <strong>Session Spreading Rule</strong>
+            <span class="badge badge-gold section-badge" style="margin-left:.4rem">Soft — Penalty</span>
+            <p>Encourage sessions to be distributed evenly across the scheduling period rather than clustering together.</p>
+          </div>
+        </label>
+        <div class="constraint-detail" id="c-spread-detail">
+          <div class="form-row" style="margin-top:.85rem;align-items:flex-end;flex-wrap:wrap">
+            <div class="form-group" style="min-width:0;flex:0 0 auto">
+              <label>Penalty Weight</label>
+              <div style="display:flex;gap:.4rem;align-items:center">
+                <input type="number" id="c-spread-weight" min="0.01" max="1" step="0.01" value="0.1"
+                      style="width:72px;text-align:center"/>
+              </div>
+            </div>
+          </div>
+          <p style="font-size:.77rem;color:var(--muted);margin-top:.3rem;line-height:1.5">
+            The scheduling period is divided into equal epochs — one per required session.
+            A penalty is added for each epoch that ends up empty.
+            Solver minimizes total penalty.
+            <br/>
+            <em>Weight controls priority relative to other soft constraints. Higher values enforce spreading more aggressively.
+            Recommended range: 0.01 – 0.5.</em>
+            <br/>
+            <em>Example: A course requiring 4 sessions divides the term into 4 epochs.
+            If 2 sessions fall in epoch 1 and epoch 3 is empty, penalty = 1.</em>
+          </p>
+        </div>
+      </div>
     </div>
 
     <div style="margin-top:1rem;display:flex;justify-content:flex-end">
@@ -336,7 +423,7 @@
       <div class="meta-item"><label>Status</label><span id="tt-meta-status">—</span></div>
       <div class="meta-item"><label>Generated</label><span id="tt-meta-time">—</span></div>
       <div class="meta-item"><label>Constraint Type</label><span id="tt-meta-type">—</span></div>
-      <div class="meta-item"><label>Soft Constraint Penalty</label><span id="tt-meta-penalty">—</span></div>
+      <div class="meta-item"><label>Soft Constraint Violations</label><span id="tt-meta-penalty">—</span></div>
       <div class="meta-item"><label>Total Sessions</label><span id="tt-meta-total">—</span></div>
     </div>
     <div id="tt-stale-warn" class="stale-warn" style="display:none">⚠ Config changed — regenerate for latest schedule</div>

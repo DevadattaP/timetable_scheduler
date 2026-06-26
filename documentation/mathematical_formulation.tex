@@ -56,6 +56,9 @@ This formulation represents the scheduling problem for the IIM EPGP Program, acc
         \quad \emph{(used by optional constraint H6)}
     \item $M_f$: Maximum sessions faculty $f$ may teach per calendar day.
     \item $M$: Maximum number of \textbf{consecutive periods} in which the same course may be taught to the same scope without incurring a penalty (user-configured; default $M=2$). A window of $M+1$ consecutive same-boundary periods that all have active sessions constitutes one violation.
+    \item $\alpha$: Penalty weight for the session spreading rule (user-configured; default $\alpha = 0.1$). Controls the priority of spreading relative to the consecutive rule in the objective. A smaller $\alpha$ keeps spreading as a secondary preference; a larger $\alpha$ enforces it more aggressively. Recommended range: $0.01$--$0.5$.
+    \item $D$: Total number of calendar days in the scheduling horizon, $D = (\text{end\_date} - \text{start\_date}).\text{days} + 1$.
+    \item $\mathcal{E}_{b,c,i}$: The set of slot indices $t$ for bucket $b$ and course $c$ whose calendar date falls in epoch $i$, where epoch $i$ covers the day-offset range $\bigl[\,\lfloor i \cdot D / R_{b,c} \rfloor,\; \lfloor (i+1) \cdot D / R_{b,c} \rfloor - 1\,\bigr]$ and $i \in \{0,\, 1,\, \ldots,\, R_{b,c} - 1\}$. Only slots that are not excluded by faculty unavailability or area exclusion are included. An epoch with $\mathcal{E}_{b,c,i} = \emptyset$ carries no penalty and no variable is created for it.
     \item Scope: The consecutive-rule and auxiliary variables operate over a configurable \emph{scope}:
     \begin{itemize}
         \item Sections mode: scope = (b, c) (bucket-course pair, i.e., per-section behavior)
@@ -65,32 +68,42 @@ This formulation represents the scheduling problem for the IIM EPGP Program, acc
 
 \section{Decision Variables}
 \begin{itemize}
-    \item $x_{b,c,t} \in \{0,1\}$: 1 if bucket $b$ is assigned course $c$ at time slot $t$; 0 otherwise.
-                  (In Sections mode this enforces one course per $(b,t)$; in Areas mode multiple concurrent $x_{b,c,t}=1$ for the same $(b,t)$ are allowed unless forbidden by other constraints.)
+    \item $x_{b,c,t} \in \{0,1\}$: 1 if bucket $b$ is assigned course $c$ at time slot $t$; 0 otherwise. (In Sections mode this enforces one course per $(b,t)$; in Areas mode multiple concurrent $x_{b,c,t}=1$ for the same $(b,t)$ are allowed unless forbidden by other constraints.)
     \item $y_{\mathrm{scope},pk} \in \{0,1\}$: Auxiliary variable; 1 if the given \emph{scope} has at least one session of the relevant course in period $pk$; 0 otherwise.
     \item $p_{\mathrm{scope},pk_0} \in \{0,1\}$: Penalty variable; 1 if the scope is active in \emph{every} period of the window $\bigl(pk_0,\;\mathrm{succ}(pk_0),\;\ldots,\;\mathrm{succ}^M(pk_0)\bigr)$; 0 otherwise. Created only when the consecutive rule is enabled.
+    \item $e_{b,c,i} \in \{0,1\}$: Epoch-presence variable; 1 if at least one session of course $c$ in bucket $b$ falls within epoch $i$; 0 otherwise. Created only when the spreading rule is enabled and $R_{b,c} \geq 2$, and only for epochs where $\mathcal{E}_{b,c,i} \neq \emptyset$.
 \end{itemize}
 
 \section{Objective Function}
-The objective depends on whether the consecutive sessions rule is enabled in the configuration.
+The objective depends on which soft constraints are enabled in the configuration. Let $\mathbf{1}[\cdot]$ denote indicator conditions on the enabled flags.
 
 \bigskip
-\noindent\textbf{Case 1 — Consecutive rule enabled (Soft):}
+\noindent\textbf{General form:}
 \begin{equation}
-    \text{Minimize} \quad Z \;=\;
-    \sum_{s \in S}\; \sum_{c \in C}\; \sum_{pk_0} \; p_{s,c,pk_0}
+    \text{Minimize} \quad Z \;=\; \underbrace{\sum_{\mathrm{scope}}\;\sum_{pk_0} p_{\,\mathrm{scope},\,pk_0}}_{\text{consecutive penalty}} \;+\; \underbrace{\alpha \;\sum_{b \in B}\;\sum_{c \in C}\;\sum_{i=0}^{R_{b,c}-1} \bigl(1 - e_{b,c,i}\bigr)}_{\text{spreading penalty}}
 \end{equation}
-Minimize the total number of windows in which the same course is taught in $M+1$ or more consecutive same-boundary periods for the same section.
+
+\noindent Each term is included only when its corresponding rule is enabled:
 
 \bigskip
-\noindent\textbf{Case 2 — Consecutive rule disabled (Pure feasibility):}
-\begin{equation}
-    \text{Minimize} \quad Z \;=\; 0
-\end{equation}
-No soft objective; the solver simply finds any schedule satisfying all active hard constraints.
+\begin{center}
+\begin{tabular}{lll}
+\hline
+Consecutive & Spreading & Objective \\
+\hline
+Disabled & Disabled & $Z = 0$ \quad (pure feasibility) \\
+Enabled  & Disabled & $Z = \displaystyle\sum_{\mathrm{scope},\,pk_0} p_{\,\mathrm{scope},\,pk_0}$ \\
+Disabled & Enabled  & $Z = \alpha\displaystyle\sum_{b,c,i}(1 - e_{b,c,i})$ \\
+Enabled  & Enabled  & $Z = \displaystyle\sum_{\mathrm{scope},\,pk_0} p_{\,\mathrm{scope},\,pk_0} + \alpha\displaystyle\sum_{b,c,i}(1 - e_{b,c,i})$ \\
+\hline
+\end{tabular}
+\end{center}
 
-\section{Constraints}
-\subsection*{Fixed Hard Constraints (always applied)}
+\bigskip
+\noindent The two terms are additive and independent. Because $\alpha$ is kept small, the consecutive rule remains dominant when both are active. The spreading term $(1 - e_{b,c,i}) = 1$ when epoch $i$ is empty (a gap) and $0$ when it contains at least one session. Minimizing the sum is therefore equivalent to filling as many epochs as possible, pushing the solver toward uniform distribution.
+
+\section{Hard Constraints}
+\subsection{Fixed Hard Constraints (always applied)}
 \begin{itemize}
     \item \textbf{H1: Session Requirement}
     \begin{equation}
@@ -133,9 +146,9 @@ No soft objective; the solver simply finds any schedule satisfying all active ha
     A bucket cannot be scheduled for the same course more than once on the same calendar day.
 \end{itemize}
 
-\subsection*{Optional Hard Constraints (can be disabled via configuration)}
+\subsection{Optional Hard Constraints (can be enabled/disabled in configuration)}
 \begin{itemize}
-    \item \textbf{H6: Faculty Unavailability} \quad \emph{(Optional)}
+    \item \textbf{H6: Faculty Unavailability}
     \begin{equation}
         x_{b,c,t} = 0
         \quad \text{if}\;
@@ -146,7 +159,7 @@ No soft objective; the solver simply finds any schedule satisfying all active ha
 
     A class cannot be scheduled in any time slot $(\text{date}, \text{fromTime})$ marked as unavailable for the assigned faculty member. Full-day unavailability is modeled as all time slots of that date being included in $\mathcal{U}_f$.
 
-    \item \textbf{H7: Course Conflict Groups (Bucket Scope)} \quad \emph{(Optional)}
+    \item \textbf{H7: Course Conflict Groups (Bucket Scope)}
     \begin{equation}
         \sum_{b \in B_g}\;\sum_{c \in C_g}
         \;\sum_{\substack{t\,:\\mathrm{Date}(b,t)=d,\\mathrm{FromTime}(b,t)=\tau}}
@@ -156,10 +169,11 @@ No soft objective; the solver simply finds any schedule satisfying all active ha
     For each conflict group $g$, at most one course from $C_g$ may run at any given date and start time across the applicable buckets $B_g$.
 \end{itemize}
 
-\section{Soft Constraint: Consecutive Sessions Rule}
+\section{Soft Constraints \large (can be enabled/disabled in configuration)}
+\subsection{Consecutive Sessions Rule}
 When the consecutive rule is enabled, we penalize every window in which the same course is taught to the same section in $M+1$ or more consecutive same-boundary periods. The formulation uses auxiliary period-activity indicators $y$ to link slot-level decisions $x$ to the period-level penalty variables $p$.
 
-\subsection*{Window Eligibility}
+\subsubsection*{Window Eligibility}
 A window $\mathcal{W} = \bigl(pk_0,\;\mathrm{succ}(pk_0),\;\ldots,\;\mathrm{succ}^M(pk_0)\bigr)$ of length $M+1$ over $(s, c)$ is \textbf{eligible} if and only if:
 
 \begin{enumerate}
@@ -173,7 +187,7 @@ A window $\mathcal{W} = \bigl(pk_0,\;\mathrm{succ}(pk_0),\;\ldots,\;\mathrm{succ
     where $t_0, t_j$ are representative slots in $pk_0$ and $\mathrm{succ}^j(pk_0)$ respectively. This ensures the consecutive counter resets at month (or other configured) boundaries, so violations cannot span across them.
 \end{enumerate}
 
-\subsection*{Auxiliary Constraints (linking $y$ to $x$)}
+\subsubsection*{Auxiliary Constraints (linking $y$ to $x$)}
 
 \begin{itemize}
     \item \textbf{A1: Period Activity — Lower Bound}
@@ -192,7 +206,7 @@ A window $\mathcal{W} = \bigl(pk_0,\;\mathrm{succ}(pk_0),\;\ldots,\;\mathrm{succ
     $y_{\mathrm{scope},pk}$ is forced to 0 if \emph{no} session within the scope is scheduled in period $pk$.
 \end{itemize}
 
-\subsection*{Penalty Activation}
+\subsubsection*{Penalty Activation}
 \begin{itemize}
     \item \textbf{P: Consecutive Period Penalty}
 
@@ -219,12 +233,88 @@ A window $\mathcal{W} = \bigl(pk_0,\;\mathrm{succ}(pk_0),\;\ldots,\;\mathrm{succ
     \end{itemize}
 \end{itemize}
 
-\section*{Implementation Notes}
-The solver implementation generalizes the original per-section model by introducing a bucket abstraction and a configurable \emph{scope} for the consecutive-rule. Key points:
+\subsection{Session Spreading Rule}
+When the spreading rule is enabled, we penalize every epoch that receives no session,
+encouraging the solver to distribute sessions uniformly across the scheduling horizon.
+The formulation introduces epoch-presence variables $e$ that link slot-level decisions
+$x$ to the epoch-level spreading penalty.
+
+\subsubsection*{Epoch Definition}
+For each $(b, c)$ pair with $R_{b,c} \geq 2$, the scheduling horizon of $D$ days is
+divided into $R_{b,c}$ equal-length epochs. Epoch $i$ covers calendar days in the
+offset range:
+\begin{equation}
+    \left[\;\left\lfloor \frac{i \cdot D}{R_{b,c}} \right\rfloor,\;\;
+           \left\lfloor \frac{(i+1) \cdot D}{R_{b,c}} \right\rfloor - 1\;\right]
+    \quad i \in \{0,\,1,\,\ldots,\,R_{b,c}-1\}
+\end{equation}
+The epoch index for a slot $t$ is therefore:
+\begin{equation}
+    \mathrm{epoch}(b,t) \;=\;
+    \min\!\left(
+        \left\lfloor
+            \frac{(\mathrm{Date}(b,t) - \mathrm{start\_date}).\mathrm{days}
+                  \;\times\; R_{b,c}}{D}
+        \right\rfloor,\;
+        R_{b,c} - 1
+    \right)
+\end{equation}
+Slots excluded by faculty unavailability or area exclusion are omitted from
+$\mathcal{E}_{b,c,i}$. An epoch whose $\mathcal{E}_{b,c,i} = \emptyset$ is
+structurally unschedulable and is excluded from the penalty — no variable is created
+and no penalty is counted.
+
+\subsubsection*{Auxiliary Constraints (linking $e$ to $x$)}
 \begin{itemize}
-    \item The decision variables and constraints are constructed over buckets $B$ so the same code supports Sections and Areas modes.
-    \item The consecutive-rule auxiliary variables $y$ and penalties $p$ are indexed by the chosen scope (either $(b,c)$ pairs or course-level $c$) so penalties are computed correctly in each mode.
-    \item Helper routines compute period adjacency and boundary keys robustly across year boundaries (ISO week rollovers) to ensure correct window eligibility checks.
+    \item \textbf{E1: Epoch Presence — Lower Bound}
+    \begin{equation}
+        e_{b,c,i} \;\geq\; x_{b,c,t}
+        \quad \forall\, t \in \mathcal{E}_{b,c,i}
+    \end{equation}
+    $e_{b,c,i}$ is forced to 1 if \emph{any} session is placed in epoch $i$.
+
+    \item \textbf{E2: Epoch Presence — Upper Bound}
+    \begin{equation}
+        e_{b,c,i} \;\leq\; \sum_{t\,\in\,\mathcal{E}_{b,c,i}} x_{b,c,t}
+        \quad \forall\, b \in B,\; c \in C,\; i \in \{0,\ldots,R_{b,c}-1\}
+    \end{equation}
+    $e_{b,c,i}$ is forced to 0 if \emph{no} session falls in epoch $i$.
+    This upper bound is critical: without it the solver could set $e_{b,c,i} = 1$
+    freely for all epochs, gaining reward without actually spreading sessions.
 \end{itemize}
+
+\subsubsection*{Penalty Contribution}
+\begin{itemize}
+    \item \textbf{S: Empty-Epoch Penalty}
+
+    For each schedulable epoch $i$ of pair $(b,c)$:
+    \begin{equation}
+        \text{gap}_{b,c,i} \;=\; 1 - e_{b,c,i}
+    \end{equation}
+    $\text{gap}_{b,c,i} = 1$ when epoch $i$ is empty; $0$ when it contains at least one session.
+    The total spreading penalty contributed to the objective is:
+    \begin{equation}
+        \alpha \;\sum_{b \in B}\;\sum_{c \in C}\;\sum_{i=0}^{R_{b,c}-1}
+        \bigl(1 - e_{b,c,i}\bigr)
+    \end{equation}
+
+    \noindent\textbf{Key properties:}
+    \begin{itemize}
+        \item Over-filled epochs (more than one session in epoch $i$) incur no additional penalty.
+        \item The minimum achievable penalty is 0, attained when every epoch contains
+              at least one session — the ideal uniform distribution.
+        \item The maximum possible penalty for a pair $(b,c)$ is $\alpha \times R_{b,c}$
+              (all epochs empty), which in practice cannot occur because H1 requires
+              exactly $R_{b,c}$ sessions to be placed.
+    \end{itemize}
+\end{itemize}
+
+\subsubsection*{Interaction with the Consecutive Rule}
+The spreading and consecutive rules are additive in the objective and fully independent
+in their constraint sets. In edge cases they may pull in opposite directions: spreading
+encourages a session in every period while the consecutive rule penalizes too many
+adjacent periods. The weight $\alpha$ resolves this tension — a small $\alpha$ lets
+the consecutive rule dominate, while a larger $\alpha$ prioritizes uniform distribution.
+The two rules may be enabled independently or together.
 
 \end{document}

@@ -28,9 +28,16 @@ PARAMETERS:
                  reset_boundary = "month" → bk = date.year × 100 + date.month
                  reset_boundary = "none"  → bk = 0  (no reset, sequence is continuous)
   m_f        = maximum sessions faculty f may teach per calendar day
-  unavail[f] = mapping of dates to unavailable time slots (set of from_time values); None indicates full-day unavailability  [optional — H6]
+  unavail[f] = mapping of dates to unavailable time slots (set of from_time values); 
+                None indicates full-day unavailability  [optional — H6]
   M          = max_consecutive (integer ≥ 1, from constraintConfig)
                A window of (M+1) consecutive same-boundary periods triggers a penalty.
+  α          = spread_weight (float, from constraintConfig.spreadingRule.weight, default 0.1)
+               Relative penalty weight for the spreading rule vs the consecutive rule.
+  D          = total calendar days in [start_date, end_date] (inclusive)
+  epoch[b,c,i] = the set of slot indices t for (b,c) whose date falls in epoch i,
+               where epoch i covers the day-offset range [i·D/req, (i+1)·D/req)
+               and i ∈ {0, …, req[b,c]-1}
 
 DECISION VARIABLES:
   x[b,c,t]   ∈ {0,1}  — 1 if bucket b is taught course c at slot t 
@@ -40,11 +47,18 @@ DECISION VARIABLES:
                         auxiliary presence variable for a scope in period pk where scope is:
                             - Sections mode: scope = (b,c) (bucket-course pair)
                             - Areas mode: scope = c (course-level scope)
-  p[scope,pk0] ∈ {0,1}  — 1 if the window [pk0, pk0+1, …, pk0+M] is a consecutive violation for scope (scope is defined save as y)  (only created when consecutive rule enabled)
+  p[scope,pk0] ∈ {0,1}  — 1 if the window [pk0, pk0+1, …, pk0+M] is a consecutive violation for scope (scope is defined save as y)  
+                        (only created when consecutive rule enabled)
+  e[b,c,i]   ∈ {0,1}  — 1 if at least one session of course c in bucket b falls in epoch i
+                        (only created when spreadingRule enabled and req[b,c] ≥ 2)
 
 OBJECTIVE:
   Consecutive rule DISABLED → Minimize 0                      (pure feasibility)
-  Consecutive rule ENABLED  → Minimize Σ_{scope,pk0} p[scope,pk0] (minimize violations)
+  Consecutive ONLY    → Minimize Σ_{scope,pk0} p[scope,pk0]
+  Spreading ONLY      → Minimize α × Σ_{b,c,i} (1 − e[b,c,i])
+  Both ENABLED        → Minimize Σ_{scope,pk0} p[scope,pk0]  +  α × Σ_{b,c,i} (1 − e[b,c,i])
+
+  α is kept small (recommended 0.01 – 0.5) so spreading acts as a secondary preference; the consecutive rule remains dominant.
 
 FIXED HARD CONSTRAINTS (always applied):
   (H1) Session Fulfillment:
@@ -72,7 +86,8 @@ OPTIONAL HARD CONSTRAINTS (toggled via constraintConfig):
   (H7) Course Conflict Groups:
          Σ_{c ∈ C_g, b ∈ B_g, t: (date[b,t], ft[b,t]) = (d, ft)} x[b,c,t] ≤ 1
          ∀ g, (d, ft)
-         [courses in the same group may not run at the same date+time (for affected sections in Sections mode, across all areas in Areas mode)]
+         [courses in the same group may not run at the same date+time 
+            (for affected sections in Sections mode, across all areas in Areas mode)]
 
 SOFT CONSTRAINT — Consecutive Sessions Rule (when enabled):
   Auxiliary constraints linking y ↔ x (applied using the chosen scope):
@@ -90,6 +105,31 @@ SOFT CONSTRAINT — Consecutive Sessions Rule (when enabled):
   (P)  p[scope,pk0] ≥ Σ_{pk ∈ W} y[scope,pk] - M    ∀ eligible windows W
        When all M+1 y-values equal 1 → RHS = 1, so p is forced to 1 (violation counted).
        When fewer than M+1 y-values equal 1 → RHS ≤ 0, constraint is slack (p stays 0).
+
+SOFT CONSTRAINT — Session Spreading Rule (when enabled):
+  Epoch definition — for each (b,c) pair with req[b,c] ≥ 2:
+    The date range [start_date, end_date] is divided into req[b,c] equal-length epochs.
+    Epoch i contains all slots t of bucket b whose date satisfies:
+      floor(day_offset(date[b,t]) × req[b,c] / D) = i
+    where day_offset(d) = (d − start_date).days and i ∈ {0, …, req[b,c]−1}.
+
+  Auxiliary constraints linking e ↔ x:
+  (E1) e[b,c,i] ≥ x[b,c,t]          ∀ t ∈ epoch[b,c,i]
+       [e is forced to 1 if any session is placed in epoch i]
+  (E2) e[b,c,i] ≤ Σ_{t ∈ epoch[b,c,i]} x[b,c,t]    ∀ b, c, i
+       [e is forced to 0 if no sessions exist in epoch i — prevents free reward]
+
+  Penalty contribution:
+  (S)  (1 − e[b,c,i])  — equals 1 when epoch i is empty (gap penalty), 0 otherwise.
+       Summed across all (b,c,i) and scaled by α in the objective.
+       Over-filled epochs (more than one session) do not incur any additional penalty.
+
+  Interaction with the consecutive rule:
+    The two soft terms are additive in the objective and independent in their constraints.
+    In rare cases they may pull in opposite directions (spreading wants sessions in every period; 
+    the consecutive rule penalises too many adjacent periods). 
+    The weight α resolves this: a small α lets the consecutive rule dominate; a larger α
+    prioritises uniform distribution.
 """
 
 import pulp
@@ -161,6 +201,9 @@ def _solve(data):
     # config
     _ccfg = data.get("constraintConfig", {})
     _crule = _ccfg.get("consecutiveRule", {})
+    _spread        = _ccfg.get("spreadingRule", {})
+    spread_enabled = _spread.get("enabled", False)
+    spread_weight  = float(_spread.get("weight", 0.1))
     apply_unavail = _ccfg.get("facultyUnavailability", True)
     apply_conflicts = _ccfg.get("courseConflicts", True)
     consec_enabled = _crule.get("enabled", True)
@@ -348,7 +391,7 @@ def _solve(data):
         if cap_messages:
             return {
                 "status": "error",
-                "constraint_type": "soft" if consec_enabled else "hard",
+                "constraint_type": "soft" if consec_enabled or spread_enabled else "hard",
                 "penalty": None,
                 "timetable": [],
                 "message": "\n".join(cap_messages),
@@ -481,8 +524,51 @@ def _solve(data):
                     if key not in p:
                         p[key] = pulp.LpVariable(f"p_{_scope_label(scope)}_{window[0]}", cat="Binary")
 
+    e = {}   # e[(b, c, i)] = 1 if epoch i has ≥1 session of course c in bucket b
+
+    if spread_enabled:
+        total_days = (end_date - start_date).days + 1
+
+        for (b, c), req in required.items():
+            if req < 2:
+                continue  # nothing to spread
+
+            # --- static pre-computation: assign each slot to an epoch index ---
+            epoch_slots: dict[int, list] = defaultdict(list)
+            for t in range(n_slots[b]):
+                if (b, c, t) not in x:
+                    continue  # slot excluded (unavailable)
+                day_offset = (slot_info[(b, t)]["date"] - start_date).days
+                # epoch_index in [0, req-1]
+                epoch_idx  = min(int(day_offset * req / total_days), req - 1)
+                epoch_slots[epoch_idx].append(t)
+
+            for i, slots_in_epoch in epoch_slots.items():
+                if not slots_in_epoch:
+                    continue
+
+                e_var = pulp.LpVariable(f"e_{b}_{c}_{i}", cat="Binary")
+                e[(b, c, i)] = e_var
+
+                # upper bound: e can only be 1 if at least one session exists in epoch i
+                prob += e_var <= pulp.lpSum(x[(b, c, t)] for t in slots_in_epoch)
+
+                # lower bounds: force e to 1 if any session is placed in epoch i
+                for t in slots_in_epoch:
+                    prob += e_var >= x[(b, c, t)]
+        
     # Objective
-    prob += (pulp.lpSum(p.values()) if p else 0), "obj"
+    # Consecutive penalty term
+    consec_term = pulp.lpSum(p.values()) if p else 0
+
+    # Spreading term: penalise empty epochs (1 - e[b,c,i] = 1 when epoch is empty)
+    # α is small so spreading is a secondary preference; consecutive rule stays dominant
+    spread_term = (
+        pulp.lpSum(1 - e_var for e_var in e.values()) * spread_weight
+        if spread_enabled and e else 0
+    )
+
+    prob += consec_term + spread_term, "obj"
 
     # H1: Session Fulfillment
     # Note: sum only over existing x vars (unavailable slots were excluded).
@@ -582,9 +668,10 @@ def _solve(data):
     # These structures are no longer needed once constraints are posted.
     del fac_date_slots, time_slot_fac, date_slots
     del consec_period_triplets, penalty_windows
+    del e   # values already baked into prob constraints; dict not needed at runtime
 
     # Solve
-    solver = pulp.PULP_CBC_CMD(msg=False, timeLimit=30)
+    solver = pulp.PULP_CBC_CMD(msg=False, timeLimit=100, threads=4)
     prob.solve(solver)
 
     status_str = pulp.LpStatus[prob.status]
@@ -593,7 +680,7 @@ def _solve(data):
         del prob, x, y, p
         return {
             "status": "Infeasible",
-            "constraint_type": "soft" if consec_enabled else "hard",
+            "constraint_type": "soft" if consec_enabled or spread_enabled else "hard",
             "penalty": None,
             "timetable": [],
             "message": "No feasible timetable found — even with soft constraints. \n Check your configuration (slots, required sessions, faculty availability, conflict groups).",
@@ -603,7 +690,7 @@ def _solve(data):
         del prob, x, y, p
         return {
             "status": "error",
-            "constraint_type": "soft" if consec_enabled else "hard",
+            "constraint_type": "soft" if consec_enabled or spread_enabled else "hard",
             "penalty": None,
             "timetable": [],
             "message": f"Solver: {status_str}",
@@ -615,7 +702,7 @@ def _solve(data):
     active_assignments: set[tuple] = {
         k for k, var in x.items() if int(pulp.value(var) or 0) == 1
     }
-    penalty = int(pulp.value(prob.objective) or 0) if consec_enabled else 0
+    penalty = round(float(pulp.value(prob.objective) or 0), 2) if consec_enabled or spread_enabled else 0
     del prob, x, y, p   # LP objects are no longer needed
 
     # Build timetable from extracted assignments
@@ -643,7 +730,7 @@ def _solve(data):
 
     return {
         "status": "Optimal" if penalty == 0 else "Feasible",
-        "constraint_type": "soft" if consec_enabled else "hard",
+        "constraint_type": "soft" if consec_enabled or spread_enabled else "hard",
         "penalty": penalty,
         "timetable": timetable,
         "message": "Schedule generated successfully.",
@@ -954,6 +1041,112 @@ def verify_timetable(data, timetable):
     # Drop all temporary columns added to df
     df.drop(columns=["_weekKey"], inplace=True, errors="ignore")
 
+    # Spreading violations
+    _spread_v        = _ccfg.get("spreadingRule", {})
+    spread_enabled_v = _spread_v.get("enabled", False)
+    spread_weight  = float(_spread_v.get("weight", 0.1))
+    
+    spreading_violations = []
+
+    if spread_enabled_v:
+        start_date_v = _parse_date(data["startDate"])
+        end_date_v   = _parse_date(data["endDate"])
+        total_days_v = (end_date_v - start_date_v).days + 1
+
+        # Precompute slot weekdays + excluded dates per bucket
+        # mirrors the solver's slot_info / excluded_vars logic
+        _WDAY_MAP = {
+            "Monday": 0, "Tuesday": 1, "Wednesday": 2, "Thursday": 3,
+            "Friday": 4, "Saturday": 5, "Sunday": 6,
+        }
+        bucket_slot_defs:  dict[str, list] = {}
+        bucket_excl_dates: dict[str, set]  = {}
+
+        if area_mode:
+            for area_cfg in data.get("areas", []):
+                aname = area_cfg.get("shortName", "")
+                bucket_slot_defs[aname]  = [
+                    (_WDAY_MAP[sl["weekday"]], sl["fromTime"])
+                    for sl in area_cfg.get("slots", [])
+                ]
+                # excludedDates are stored as strings ("YYYY-MM-DD") — keep as-is
+                bucket_excl_dates[aname] = set(area_cfg.get("excludedDates", []))
+        else:
+            for sec_cfg in data.get("sections", []):
+                sname = sec_cfg.get("name", "")
+                bucket_slot_defs[sname]  = [
+                    (_WDAY_MAP[sl["weekday"]], sl["fromTime"])
+                    for sl in sec_cfg.get("slots", [])
+                ]
+                bucket_excl_dates[sname] = set()   # sections have no excludedDates
+        
+        for (b, c), req in required.items():
+            if req < 2:
+                continue
+
+            # Filter sessions for this (b, c) pair
+            sub = df[(df[bucket_col] == b) & (df["courseCode"] == c)]
+            if sub.empty:
+                continue  # already caught by session_violations
+
+            # Assign each actual session to its epoch index (same formula as solver)
+            epoch_hits: dict[int, list[str]] = defaultdict(list)  # epoch_idx → [dateStr]
+            for _, row in sub.iterrows():
+                day_offset = (row["date"].date() - start_date_v).days
+                epoch_idx  = min(int(day_offset * req / total_days_v), req - 1)
+                epoch_hits[epoch_idx].append(row["dateStr"])
+
+            # Determine which epoch indices have ≥1 schedulable slot for this (b, c) pair.
+            # This exactly mirrors the solver: e[(b,c,i)] is only created when epoch_slots[i]
+            # is non-empty, so only those epochs can contribute a penalty.
+            available_epochs: set[int] = set()
+            slot_defs_bc  = bucket_slot_defs.get(b, [])
+            excl_dates_bc = bucket_excl_dates.get(b, set())
+            f_v           = faculty_map.get((b, c), "?")
+
+            cur = start_date_v
+            while cur <= end_date_v:
+                cur_str = str(cur)          # "YYYY-MM-DD" — matches excludedDates string format
+                if cur_str not in excl_dates_bc:
+                    wd = cur.weekday()
+                    for (slot_wd, ft) in slot_defs_bc:
+                        if slot_wd == wd:
+                            # Also check faculty unavailability — solver excludes these from x
+                            if (f_v, cur_str) not in unavail_full_day \
+                            and (f_v, cur_str, ft) not in unavail_slots:
+                                day_offset = (cur - start_date_v).days
+                                epoch_idx  = min(int(day_offset * req / total_days_v), req - 1)
+                                available_epochs.add(epoch_idx)
+                cur += timedelta(days=1)
+            
+            # Compute human-readable date range for each epoch
+            epoch_ranges: list[dict] = []
+            for i in range(req):
+                epoch_start = start_date_v + timedelta(days=int(i * total_days_v / req))
+                epoch_end   = start_date_v + timedelta(days=int((i + 1) * total_days_v / req) - 1)
+                epoch_end   = min(epoch_end, end_date_v)
+                epoch_ranges.append({
+                    "epochIndex":    i,
+                    "epochStart":    str(epoch_start),
+                    "epochEnd":      str(epoch_end),
+                    "sessionDates":  epoch_hits.get(i, []),        # [] means empty epoch
+                    "sessionCount":  len(epoch_hits.get(i, [])),
+                    "isEmpty":       i not in epoch_hits and i in available_epochs,  # mirrors solver: only penalize if schedulable slots exist
+                })
+
+            empty_count = sum(1 for ep in epoch_ranges if ep["isEmpty"])
+            if empty_count == 0:
+                continue  # perfectly spread, no violation
+
+            spreading_violations.append({
+                "section":      b,
+                "course":       c,
+                "totalEpochs":  req,
+                "emptyEpochs":  empty_count,
+                "penalty":      round(empty_count * spread_weight, 2),      # mirrors solver: alpha point per empty epoch
+                "epochs":       epoch_ranges,     # full breakdown for UI drill-down
+            })
+        
     return {
         "sessionCount": session_violations,
         "slotAssignmentViolations": slot_assignment_violations,
@@ -964,8 +1157,10 @@ def verify_timetable(data, timetable):
         "unavailViolations": unavail_violations,
         "conflictViolations": conflict_violations,
         "consecutiveViolations": consec_violations,
+        "consecutiveViolationsPenalty": len(consec_violations),
+        # "spreadingViolations": spreading_violations,
+        "spreadingViolationsPenalty": round(sum(v["penalty"] for v in spreading_violations), 2),
         "weekDistribution": week_dist,
-        "totalPenalty": len(consec_violations),
         "allClear": (
             len(session_violations) == 0 and
             len(slot_assignment_violations) == 0 and
@@ -974,6 +1169,8 @@ def verify_timetable(data, timetable):
             len(spacing_violations) == 0 and
             len(monthly_violations) == 0 and
             len(unavail_violations) == 0 and
-            len(conflict_violations) == 0
+            len(conflict_violations) == 0 and
+            len(consec_violations) == 0 and
+            len(spreading_violations) == 0
         ),
     }
