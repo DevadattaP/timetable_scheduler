@@ -1,130 +1,466 @@
-// STORAGE & STATE
+// ─── STORAGE & STATE ────────────────────────────────────────
 const KEY = {
-  sections:'program_sections', courses:'program_courses', faculty:'program_faculty', 
-  sectionMappings:'program_sectionMappings', areaMappings:'program_areaMappings',
-  areas:'program_areas', configMode:'program_configMode',
-  startDate:'program_startDate', endDate:'program_endDate',
-  timetable:'program_timetable', timetableMeta:'program_timetableMeta',
-  configEdit:'program_configLastEdit', conflicts: 'program_conflicts',
-  constraintConfig: 'program_constraintConfig',
+  semesters:       'program_semesters',
+  // timetable keys still at top-level (used by timetable tab)
+  timetable:       'program_timetable',
+  timetableMeta:   'program_timetableMeta',
+  configEdit:      'program_configLastEdit',
 };
 const get = k => { try{ return JSON.parse(localStorage.getItem(k)) }catch{ return null } };
 const set = (k,v) => localStorage.setItem(k, JSON.stringify(v));
 const remove = k => localStorage.removeItem(k);
 
-function utcNowIso() {
-  return new Date().toISOString();
-}
-
+function utcNowIso() { return new Date().toISOString(); }
 function normalizeTimestamp(value) {
   if (!value) return '';
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? '' : date.toISOString();
 }
-
 function timestampMs(value) {
   const normalized = normalizeTimestamp(value);
   return normalized ? Date.parse(normalized) : NaN;
 }
-
 function isConfigNewerThanTimetable(configEdit, timetableTimestamp) {
-  const configTime = timestampMs(configEdit);
-  const timetableTime = timestampMs(timetableTimestamp);
-  return Number.isFinite(configTime) && Number.isFinite(timetableTime) && configTime > timetableTime;
+  const ct = timestampMs(configEdit), tt = timestampMs(timetableTimestamp);
+  return Number.isFinite(ct) && Number.isFinite(tt) && ct > tt;
 }
-
 function touchConfig() {
   set(KEY.configEdit, utcNowIso());
   updateStaleWarning();
 }
+function updateStaleWarning() {
+  const warn = document.getElementById('tt-stale-warn');
+  if (!warn) return;
+  const configEdit = get(KEY.configEdit);
+  const meta = State.timetableMeta;
+  warn.style.display = (meta && isConfigNewerThanTimetable(configEdit, meta.timestamp)) ? 'flex' : 'none';
+}
 
 let State = {
-  sections: [], courses: [], faculty: [], sectionMappings: [], areaMappings: [], areas: [], courseConflicts: [],
-  configMode: 'sections', startDate:'', endDate:'', timetable: null, timetableMeta: null, constraintConfig: null,
+  semesters: [],
+  // timetable (still top-level for the timetable tab)
+  timetable: null,
+  timetableMeta: null,
 };
 
 function loadState() {
-  State.sections    = get(KEY.sections)     || [];
-  State.courses     = get(KEY.courses)      || [];
-  State.faculty     = get(KEY.faculty)      || [];
-  State.sectionMappings = get(KEY.sectionMappings) || [];
-  State.areaMappings = get(KEY.areaMappings) || [];
-  State.areas       = get(KEY.areas)        || [];
-  State.configMode  = get(KEY.configMode)   || 'sections';
-  State.startDate   = get(KEY.startDate)    || '';
-  State.endDate     = get(KEY.endDate)      || '';
-  State.timetable   = get(KEY.timetable)    || null;
-  State.timetableMeta = get(KEY.timetableMeta) || null;
-  State.courseConflicts = get(KEY.conflicts) || [];
-  State.constraintConfig = get(KEY.constraintConfig) || defaultConstraintConfig();
+  State.semesters    = get(KEY.semesters)      || [];
+  State.timetable    = get(KEY.timetable)       || null;
+  State.timetableMeta= get(KEY.timetableMeta)   || null;
 }
 
-function saveSection()  { set(KEY.sections, State.sections); touchConfig(); }
-function saveCourse()   { set(KEY.courses,  State.courses);  touchConfig(); }
-function saveFaculty()  { set(KEY.faculty,  State.faculty);  touchConfig(); }
-function saveSectionMapping()  { set(KEY.sectionMappings, State.sectionMappings); touchConfig(); }
-function saveAreaMapping()     { set(KEY.areaMappings, State.areaMappings); touchConfig(); }
-function saveArea()     { set(KEY.areas,    State.areas);    touchConfig(); }
-function saveConfigMode() { set(KEY.configMode, State.configMode); touchConfig(); }
-
-function isAreaMode() {
-  return State.configMode === 'areas';
+function saveSemesters() {
+  set(KEY.semesters, State.semesters);
+  touchConfig();
 }
 
-function isSectionMode() {
-  return !isAreaMode();
+// ─── HELPERS ────────────────────────────────────────────────
+function escapeHtml(str) {
+  return String(str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function generateSemId() {
+  return 'sem_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,6);
+}
+function getSem(id) { return State.semesters.find(s => s.id === id) || null; }
+
+// ─── SEMESTER CARD MANAGEMENT ───────────────────────────────
+let expandedSemId = null; // which card is currently open
+let currentSemId  = null; // which sem the open modal belongs to
+
+/* ── Create a new blank semester ── */
+function createSemester() {
+  const count = State.semesters.length + 1;
+  const sem = {
+    id: generateSemId(),
+    name: `Semester ${count}`,
+    sections: [], courses: [], faculty: [],
+    sectionMappings: [], areaMappings: [],
+    areas: [], courseConflicts: [],
+    configMode: 'sections',
+    startDate: '', endDate: '',
+    constraintConfig: defaultConstraintConfig(),
+  };
+  State.semesters.push(sem);
+  saveSemesters();
+  renderSemCards();
+  // auto-expand the newly added card
+  toggleSemCard(sem.id);
+  toast(`"${sem.name}" added.`, 'success');
 }
 
-function getVisibleMappings() {
-  return isAreaMode() ? State.areaMappings : State.sectionMappings;
+/* ── Delete a semester card ── */
+function deleteSemCard(semId) {
+  const sem = getSem(semId);
+  if (!sem) return;
+  confirm2('Delete Semester',
+    `Delete "${sem.name}" and all its data? This cannot be undone.`,
+    () => {
+      if (expandedSemId === semId) expandedSemId = null;
+      const idx = State.semesters.findIndex(s => s.id === semId);
+      if (idx !== -1) State.semesters.splice(idx, 1);
+      saveSemesters();
+      renderSemCards();
+      toast(`"${sem.name}" deleted.`, 'warning');
+    });
 }
 
-function getVisibleConflictGroups() {
-  return State.courseConflicts.filter(group => isAreaMode() ? !group.sections || !group.sections.length : !!(group.sections && group.sections.length));
+/* ── Toggle expand / collapse ── */
+function toggleSemCard(semId) {
+  if (expandedSemId === semId) {
+    collapseSemCard(semId);
+    expandedSemId = null;
+  } else {
+    if (expandedSemId) collapseSemCard(expandedSemId);
+    expandedSemId = semId;
+    expandSemCard(semId);
+  }
 }
 
-function setConfigMode(mode) {
-  if (mode !== 'sections' && mode !== 'areas') return;
-  State.configMode = mode;
-  saveConfigMode();
-  updateConfigModeUI();
-  renderSections();
-  renderAreas();
-  renderCourses();
-  renderMappings();
-  renderConflicts();
+function expandSemCard(semId) {
+  const card = document.getElementById(`sem-card-${semId}`);
+  if (!card) return;
+  card.classList.add('expanded');
+
+  // Lazily generate body content on first expand
+  const body = document.getElementById(`${semId}-body`);
+  if (body) {
+    if (!body.children.length) body.innerHTML = semCardBodyHTML(getSem(semId));
+    body.style.display = 'block';
+  }
+
+  const arrow = card.querySelector('.sem-toggle-arrow');
+  if (arrow) arrow.textContent = '▲';
+  const actions = card.querySelector('.sem-header-actions');
+  if (actions) actions.style.display = 'flex';
+  // Ensure name field is readonly while expanded (edit-mode is separate)
+  const nameInput = document.getElementById(`${semId}-name-input`);
+  if (nameInput) nameInput.setAttribute('readonly', true);
+
+  // Populate dynamic lists
+  renderSections(semId);
+  renderAreas(semId);
+  renderCourses(semId);
+  renderFaculty(semId);
+  renderMappings(semId);
+  renderConflicts(semId);
+  updateConfigModeUI(semId);
 }
 
-function updateConfigModeUI() {
-  const areaMode = isAreaMode();
+function collapseSemCard(semId) {
+  const card = document.getElementById(`sem-card-${semId}`);
+  if (!card) return;
+  card.classList.remove('expanded');
+  const body = document.getElementById(`${semId}-body`);
+  if (body) body.style.display = 'none';
+  const arrow = card.querySelector('.sem-toggle-arrow');
+  if (arrow) arrow.textContent = '▼';
+  const actions = card.querySelector('.sem-header-actions');
+  if (actions) actions.style.display = 'none';
+}
 
-  const sectionsWrap = document.getElementById('sections-config-wrap');
-  const areasWrap = document.getElementById('areas-config-wrap');
-  const addSectionBtn = document.getElementById('add-section-btn');
-  const addAreaBtn = document.getElementById('add-area-btn');
+/* ── Name inline edit ── */
+function startEditSemName(semId) {
+  const nameInput = document.getElementById(`${semId}-name-input`);
+  const editBtn   = document.getElementById(`${semId}-edit-btn`);
+  const saveBtn   = document.getElementById(`${semId}-save-btn`);
+  if (!nameInput) return;
+  nameInput.removeAttribute('readonly');
+  nameInput.focus();
+  nameInput.select();
+  if (editBtn) editBtn.style.display = 'none';
+  if (saveBtn) saveBtn.style.display = 'inline-flex';
+}
 
-  const sectionsRadio = document.getElementById('mode-sections');
-  const areasRadio = document.getElementById('mode-areas');
-  if (sectionsRadio) sectionsRadio.checked = !areaMode;
-  if (areasRadio) areasRadio.checked = areaMode;
+function saveSemName(semId) {
+  const sem = getSem(semId);
+  if (!sem) return;
+  const nameInput = document.getElementById(`${semId}-name-input`);
+  const editBtn   = document.getElementById(`${semId}-edit-btn`);
+  const saveBtn   = document.getElementById(`${semId}-save-btn`);
+  const newName = (nameInput ? nameInput.value.trim() : '') || `Semester ${State.semesters.indexOf(sem)+1}`;
+  sem.name = newName;
+  if (nameInput) { nameInput.value = newName; nameInput.setAttribute('readonly', true); }
+  if (editBtn) editBtn.style.display = 'inline-flex';
+  if (saveBtn) saveBtn.style.display = 'none';
+  saveSemesters();
+  toast(`Renamed to "${newName}".`, 'success');
+}
 
-  if (sectionsWrap) sectionsWrap.style.display = areaMode ? 'none' : 'block';
-  if (areasWrap) areasWrap.style.display = areaMode ? 'block' : 'none';
-  if (addSectionBtn) addSectionBtn.style.display = areaMode ? 'none' : 'inline-flex';
-  if (addAreaBtn) addAreaBtn.style.display = areaMode ? 'inline-flex' : 'none';
+/* ── Switch subtab within a card ── */
+function switchSemSubtab(semId, subtab, btn) {
+  const card = document.getElementById(`sem-card-${semId}`);
+  if (!card) return;
+  card.querySelectorAll('.subtab-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  card.querySelectorAll('.sem-subtab-content').forEach(c => c.classList.remove('active'));
+  const target = document.getElementById(`${semId}-subtab-${subtab}`);
+  if (target) target.classList.add('active');
+}
 
-  const mappingTitle = document.getElementById('mapping-title');
-  const mappingDesc = document.getElementById('mapping-desc');
-  const conflictTitle = document.getElementById('conflict-title');
-  const conflictDesc = document.getElementById('conflict-desc');
-  if (mappingTitle) mappingTitle.textContent = areaMode ? 'Course-Faculty Mapping' : 'Section-Course-Faculty Mapping';
-  if (mappingDesc) mappingDesc.textContent = areaMode
-    ? 'Assign faculty to teach specific courses.'
-    : 'Assign faculty to teach specific courses for specific sections.';
-  if (conflictTitle) conflictTitle.textContent = areaMode ? '⛔ Course Conflict Groups' : '⛔ Course Conflict Groups (Tracks)';
-  if (conflictDesc) conflictDesc.textContent = areaMode
-    ? 'Courses in the same group will never be scheduled at the same time slot.'
-    : 'Courses in the same group will never be scheduled at the same time slot, even across different sections.';
+/* ── Render the full cards container ── */
+function renderSemCards() {
+  const container  = document.getElementById('sem-cards-container');
+  const emptyState = document.getElementById('sem-empty-state');
+  if (!container) return;
+  if (!State.semesters.length) {
+    if (emptyState) emptyState.style.display = 'block';
+    container.innerHTML = '';
+    return;
+  }
+  if (emptyState) emptyState.style.display = 'none';
+  container.innerHTML = State.semesters.map(sem => semCardHTML(sem)).join('');
+  // Restore any expanded card
+  if (expandedSemId && getSem(expandedSemId)) expandSemCard(expandedSemId);
+}
+
+/* ── Generate card shell HTML ── */
+function semCardHTML(sem) {
+  const id    = sem.id;
+  const isExp = expandedSemId === id;
+  return `
+<div class="sem-card${isExp?' expanded':''}" id="sem-card-${id}">
+  <div class="sem-card-header">
+    <input id="${id}-name-input" class="sem-name-input" type="text"
+      value="${escapeHtml(sem.name)}" readonly />
+    <div class="sem-header-actions" style="${isExp?'display:flex':'display:none'}">
+      <button id="${id}-edit-btn" class="sem-icon-btn" title="Edit name"
+        onclick="startEditSemName('${id}')">✎</button>
+      <button id="${id}-save-btn" class="sem-icon-btn sem-save-active" title="Save name"
+        style="display:none" onclick="saveSemName('${id}')">✓</button>
+      <button class="sem-icon-btn sem-delete-btn" title="Delete semester"
+        onclick="deleteSemCard('${id}')">🗑</button>
+    </div>
+    <button class="sem-toggle-btn" onclick="toggleSemCard('${id}')"
+      title="${isExp?'Collapse':'Expand'}">
+      <span class="sem-toggle-arrow">${isExp?'▲':'▼'}</span>
+    </button>
+  </div>
+  <div id="${id}-body" class="sem-card-body" style="${isExp?'':'display:none'}">
+    ${isExp ? semCardBodyHTML(sem) : ''}
+  </div>
+</div>`;
+}
+
+/* ── Generate the full card body (subtabs + content) ── */
+function semCardBodyHTML(sem) {
+  const id  = sem.id;
+  const cfg = sem.constraintConfig || defaultConstraintConfig();
+  const isArea = sem.configMode === 'areas';
+  return `
+<nav class="sub-nav" style="margin-top:1rem">
+  <button class="subtab-btn active" onclick="switchSemSubtab('${id}','sections',this)">Sections</button>
+  <button class="subtab-btn" onclick="switchSemSubtab('${id}','courses',this)">Courses</button>
+  <button class="subtab-btn" onclick="switchSemSubtab('${id}','faculty',this)">Faculty</button>
+  <button class="subtab-btn" onclick="switchSemSubtab('${id}','mapping',this)">Mapping</button>
+  <button class="subtab-btn" onclick="switchSemSubtab('${id}','constraints',this)">Constraints</button>
+</nav>
+
+<!-- ── SECTIONS ── -->
+<div id="${id}-subtab-sections" class="sem-subtab-content active">
+  <div class="card" style="margin-bottom:1.25rem;margin-top:1rem">
+    <div class="card-title">📅 Teaching Period</div>
+    <div class="date-range-card">
+      <div class="form-group">
+        <label>Start Date</label>
+        <input type="date" id="${id}-start-date" value="${sem.startDate||''}"/>
+      </div>
+      <div class="form-group">
+        <label>End Date</label>
+        <input type="date" id="${id}-end-date" value="${sem.endDate||''}"/>
+      </div>
+      <button class="btn btn-ghost" onclick="saveDates('${id}')">Save Dates</button>
+    </div>
+    <div class="mode-switch-card">
+      <div class="slots-label" style="margin-bottom:.35rem">Configure By</div>
+      <div class="mode-switch">
+        <label><input type="radio" name="config-mode-${id}" id="${id}-mode-sections" value="sections"
+          ${!isArea?'checked':''} onchange="setConfigMode('${id}','sections')"/> Sections</label>
+        <label><input type="radio" name="config-mode-${id}" id="${id}-mode-areas"    value="areas"
+          ${isArea?'checked':''}  onchange="setConfigMode('${id}','areas')"/> Areas</label>
+      </div>
+    </div>
+  </div>
+
+  <div id="${id}-sections-config-wrap" ${isArea?'style="display:none"':''}>
+    <div class="section-header">
+      <div><h2>Sections</h2><p>Define teaching periods and available time slots per section</p></div>
+      <button class="btn btn-primary" onclick="openSectionModal('add',null,'${id}')">+ Add Section</button>
+    </div>
+    <div id="${id}-sections-list"></div>
+  </div>
+
+  <div id="${id}-areas-config-wrap" class="card"
+    style="margin-bottom:1.25rem;margin-top:1.25rem;${isArea?'':'display:none'}">
+    <div class="section-header" style="margin-bottom:.75rem">
+      <div><h2>Areas</h2><p>Define area-specific availability and excluded dates</p></div>
+      <button class="btn btn-primary" onclick="openAreaModal('add',null,'${id}')">+ Add Area</button>
+    </div>
+    <div id="${id}-areas-list"></div>
+  </div>
+</div>
+
+<!-- ── COURSES ── -->
+<div id="${id}-subtab-courses" class="sem-subtab-content">
+  <div class="section-header" style="margin-top:1rem">
+    <div><h2>Courses</h2><p>Define courses and their session requirements</p></div>
+    <button class="btn btn-primary" onclick="openCourseModal('add',null,'${id}')">+ Add Course</button>
+  </div>
+  <div id="${id}-courses-list"></div>
+  <div class="card" style="margin-top:1.25rem">
+    <div class="card-title" id="${id}-conflict-title">⛔ Course Conflict Groups (Tracks)</div>
+    <p id="${id}-conflict-desc"
+      style="font-size:.82rem;color:var(--text2);margin-bottom:.85rem;line-height:1.6">
+      Courses in the same group will never be scheduled at the same time slot, even across different sections.
+    </p>
+    <div id="${id}-conflicts-list"></div>
+    <button class="btn btn-ghost btn-sm" style="margin-top:.5rem"
+      onclick="openConflictModal(null,'${id}')">+ Add Conflict Group</button>
+  </div>
+</div>
+
+<!-- ── FACULTY ── -->
+<div id="${id}-subtab-faculty" class="sem-subtab-content">
+  <div class="section-header" style="margin-top:1rem">
+    <div><h2>Faculty</h2><p>Add faculty members and mark unavailable timeslots</p></div>
+    <button class="btn btn-primary" onclick="openFacultyModal('add',null,'${id}')">+ Add Faculty</button>
+  </div>
+  <div id="${id}-faculty-list"></div>
+</div>
+
+<!-- ── MAPPING ── -->
+<div id="${id}-subtab-mapping" class="sem-subtab-content">
+  <div class="section-header" style="margin-top:1rem">
+    <div>
+      <h2 id="${id}-mapping-title">Section-Course-Faculty Mapping</h2>
+      <p  id="${id}-mapping-desc">Assign faculty to teach specific courses for specific sections</p>
+    </div>
+    <button class="btn btn-primary" onclick="openMappingModal('add',null,'${id}')">+ Add Mapping</button>
+  </div>
+  <div id="${id}-mapping-list"></div>
+</div>
+
+<!-- ── CONSTRAINTS ── -->
+<div id="${id}-subtab-constraints" class="sem-subtab-content">
+  ${constraintsPanelHTML(id, cfg)}
+</div>`;
+}
+
+/* ── Constraints subtab HTML (scoped to card id) ── */
+function constraintsPanelHTML(id, cfg) {
+  const con = cfg.consecutiveRule || {enabled:true, maxConsecutive:2, periodUnit:'weeks', resetBoundary:'month'};
+  const spr = cfg.spreadingRule   || {enabled:true, weight:0.1};
+  return `
+<div class="section-header" style="margin-top:1rem">
+  <div><h2>Constraints</h2><p>Control which rules apply during schedule generation</p></div>
+</div>
+<div class="card" style="margin-bottom:1rem">
+  <div class="card-title">🔒 Fixed Constraints <span class="badge badge-grey section-badge">Always Applied</span></div>
+  <ul class="rule-list">
+    <li><strong>H1 – Exact Fulfillment:</strong> Every section completes exactly the required number of sessions per course.</li>
+    <li><strong>H2 – One Course per Slot:</strong> Every available slot is filled by exactly one course.</li>
+    <li><strong>H3 – No Faculty Cloning:</strong> A faculty member cannot teach two sections simultaneously.</li>
+    <li><strong>H4 – Max Daily Workload:</strong> Faculty cannot exceed their configured maximum sessions per calendar day.</li>
+    <li><strong>H5 – Daily Course Spacing:</strong> A section cannot have the same course more than once in a single day.</li>
+  </ul>
+</div>
+<div class="card">
+  <div class="card-title">⚙ Optional Constraints</div>
+
+  <div class="constraint-item">
+    <label class="constraint-toggle">
+      <input type="checkbox" id="${id}-c-unavail" ${cfg.facultyUnavailability?'checked':''}/>
+      <div>
+        <strong>H6 – Faculty Unavailability</strong>
+        <p>Block scheduling faculty on their marked unavailable timeslots.</p>
+      </div>
+    </label>
+  </div>
+
+  <hr class="form-divider"/>
+
+  <div class="constraint-item">
+    <label class="constraint-toggle">
+      <input type="checkbox" id="${id}-c-conflicts" ${cfg.courseConflicts?'checked':''}/>
+      <div>
+        <strong>H7 – Course Conflict Groups (Tracks)</strong>
+        <p>Prevent courses in the same conflict group from running at the same time slot.</p>
+      </div>
+    </label>
+  </div>
+
+  <hr class="form-divider"/>
+
+  <div class="constraint-item">
+    <label class="constraint-toggle">
+      <input type="checkbox" id="${id}-c-consec-enabled" ${con.enabled?'checked':''}
+        onchange="toggleConsecDetail('${id}',this.checked)"/>
+      <div>
+        <strong>Consecutive Sessions Rule</strong>
+        <span class="badge badge-gold section-badge" style="margin-left:.4rem">Soft — Penalty</span>
+        <p>Limit how many consecutive periods the same course can be taught to a section.</p>
+      </div>
+    </label>
+    <div class="constraint-detail" id="${id}-c-consec-detail"
+      style="${con.enabled?'':'display:none'}">
+      <div class="form-row" style="margin-top:.85rem;align-items:flex-end;flex-wrap:wrap">
+        <div class="form-group" style="min-width:0;flex:0 0 auto">
+          <label>Max Consecutive</label>
+          <div style="display:flex;gap:.4rem;align-items:center">
+            <input type="number" id="${id}-c-consec-max" min="1" max="10"
+              value="${con.maxConsecutive||2}" style="width:56px;text-align:center"/>
+            <select id="${id}-c-consec-unit" style="width:100px">
+              <option value="weeks" ${(con.periodUnit||'weeks')==='weeks'?'selected':''}>Week(s)</option>
+              <option value="days"  ${con.periodUnit==='days'?'selected':''}>Day(s)</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-group" style="min-width:0;flex:0 0 auto">
+          <label>Reset Boundary</label>
+          <select id="${id}-c-consec-boundary" style="width:160px">
+            <option value="none"  ${(con.resetBoundary||'month')==='none'?'selected':''}>None (continuous)</option>
+            <option value="month" ${(con.resetBoundary||'month')==='month'?'selected':''}>Month</option>
+          </select>
+        </div>
+      </div>
+      <p style="font-size:.77rem;color:var(--muted);margin-top:.3rem;line-height:1.5">
+        A penalty fires when the same course appears in <strong>(max+1)</strong> consecutive periods.
+        Solver minimises total penalty.
+      </p>
+    </div>
+  </div>
+
+  <hr class="form-divider"/>
+
+  <div class="constraint-item">
+    <label class="constraint-toggle">
+      <input type="checkbox" id="${id}-c-spread-enabled" ${spr.enabled?'checked':''}
+        onchange="toggleSpreadDetail('${id}',this.checked)"/>
+      <div>
+        <strong>Session Spreading Rule</strong>
+        <span class="badge badge-gold section-badge" style="margin-left:.4rem">Soft — Penalty</span>
+        <p>Encourage sessions to be distributed evenly across the scheduling period rather than clustering.</p>
+      </div>
+    </label>
+    <div class="constraint-detail" id="${id}-c-spread-detail"
+      style="${spr.enabled?'':'display:none'}">
+      <div class="form-row" style="margin-top:.85rem;align-items:flex-end;flex-wrap:wrap">
+        <div class="form-group" style="min-width:0;flex:0 0 auto">
+          <label>Penalty Weight</label>
+          <input type="number" id="${id}-c-spread-weight" min="0.01" max="1" step="0.01"
+            value="${spr.weight||0.1}" style="width:72px;text-align:center"/>
+        </div>
+      </div>
+      <p style="font-size:.77rem;color:var(--muted);margin-top:.3rem;line-height:1.5">
+        Period divided into equal epochs — one per required session.
+        Empty epochs are penalised. Recommended weight range: 0.01–0.5.
+      </p>
+    </div>
+  </div>
+
+  <div style="margin-top:1rem;display:flex;justify-content:flex-end">
+    <button class="btn btn-primary" onclick="saveConstraintConfig('${id}')">Save Constraints</button>
+  </div>
+</div>`;
 }
 
 // TOAST
@@ -178,7 +514,7 @@ function toast(msg, type='info') {
   startTimer();
 }
 
-// TABS
+// ─── TABS ────────────────────────────────────────────────────
 document.querySelectorAll('.tab-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -186,28 +522,10 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.classList.add('active');
     const target = document.getElementById(`tab-${btn.dataset.tab}`);
     if (target) target.classList.add('active');
-
-    if (btn.dataset.tab === 'configure') {
-      const activeSubtab = document.querySelector('.subtab-btn.active') || document.querySelector('.subtab-btn');
-      if (activeSubtab) {
-        document.querySelectorAll('.subtab-content').forEach(t => t.classList.remove('active'));
-        const subtabTarget = document.getElementById(`subtab-${activeSubtab.dataset.subtab}`);
-        if (subtabTarget) subtabTarget.classList.add('active');
-      }
-      updateConfigModeUI();
-    }
+    // Configure tab: nothing extra needed — cards handle their own sub-tabs
   });
 });
-
-document.querySelectorAll('.subtab-btn').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('.subtab-btn').forEach(b => b.classList.remove('active'));
-    document.querySelectorAll('.subtab-content').forEach(t => t.classList.remove('active'));
-    btn.classList.add('active');
-    const target = document.getElementById(`subtab-${btn.dataset.subtab}`);
-    if (target) target.classList.add('active');
-  });
-});
+// NOTE: per-card subtab switching is handled by switchSemSubtab() with inline onclick
 
 // MODAL
 let _modalSaveFn = null;
@@ -250,19 +568,21 @@ function closeConfirm() {
 document.getElementById('confirm-ok').addEventListener('click', () => { if (_confirmFn) _confirmFn(); closeConfirm(); });
 document.getElementById('confirm-overlay').addEventListener('click', e => { if (e.target === e.currentTarget) closeConfirm(); });
 
-// DATES
-function saveDates() {
-  const s = document.getElementById('start-date').value;
-  const e = document.getElementById('end-date').value;
-  if(!s||!e){ toast('Please set both start and end date.','warning'); return; }
-  if(s>=e){ toast('End date must be after start date.','error'); return; }
-  State.startDate = s; State.endDate = e;
-  set(KEY.startDate, s); set(KEY.endDate, e);
-  touchConfig(); toast('Teaching period saved.','success');
+// ─── DATES ────────────────────────────────────────────────────
+function saveDates(semId) {
+  const sem = getSem(semId);
+  if (!sem) return;
+  const s = document.getElementById(`${semId}-start-date`).value;
+  const e = document.getElementById(`${semId}-end-date`).value;
+  if (!s||!e) { toast('Please set both start and end date.','warning'); return; }
+  if (s>=e)   { toast('End date must be after start date.','error');   return; }
+  sem.startDate = s;
+  sem.endDate   = e;
+  saveSemesters();
+  toast('Teaching period saved.','success');
 }
 
-// SECTIONS CRUD
-// Align array index with JavaScript Date.getDay(): 0 = Sunday, 1 = Monday, ...
+// ─── SECTIONS CRUD ────────────────────────────────────────────
 const WEEKDAYS = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 
 function sectionSlotRowHTML(slot, idx, rowPrefix='section') {
@@ -283,14 +603,15 @@ function sectionSlotRowHTML(slot, idx, rowPrefix='section') {
       <label>Duration</label>
       <input type="number" class="slot-dur" min="0.5" step="0.5" value="${slot?slot.duration:2.5}" style="text-align:center"/>
     </div>
-    <button class="btn btn-danger btn-icon btn-sm" style="margin-bottom:0;flex-shrink:0" onclick="removeSlotRow('${rowPrefix}', ${idx})">✕</button>
+    <button class="btn btn-danger btn-icon btn-sm" style="margin-bottom:0;flex-shrink:0"
+      onclick="removeSlotRow('${rowPrefix}',${idx})">✕</button>
   </div>`;
 }
 
 let _slotCounter = 0;
 function addSlotRow(slot, containerId='slots-container', rowPrefix='section') {
   const container = document.getElementById(containerId);
-  if(!container) return;
+  if (!container) return;
   const idx = _slotCounter++;
   const div = document.createElement('div');
   div.innerHTML = sectionSlotRowHTML(slot, idx, rowPrefix);
@@ -298,7 +619,7 @@ function addSlotRow(slot, containerId='slots-container', rowPrefix='section') {
 }
 function removeSlotRow(rowPrefix, idx) {
   const el = document.getElementById(`${rowPrefix}-slot-row-${idx}`);
-  if(el) el.remove();
+  if (el) el.remove();
 }
 
 function sectionModalBody(sec) {
@@ -320,25 +641,18 @@ function sectionModalBody(sec) {
 function readSlots(containerId='slots-container') {
   const container = document.getElementById(containerId);
   if (!container) return [];
-
-  const rows = container.querySelectorAll('.slot-row');
-  return Array.from(rows).map(row => {
-    const weekdayEl = row.querySelector('.slot-weekday');
-    const fromEl = row.querySelector('.slot-from');
-    const toEl = row.querySelector('.slot-to');
-    const durEl = row.querySelector('.slot-dur');
-
-    return {
-      weekday: weekdayEl ? weekdayEl.value : 'Saturday',
-      fromTime: fromEl ? fromEl.value : '09:00',
-      toTime: toEl ? toEl.value : '11:45',
-      duration: parseFloat(durEl ? durEl.value : '2.5') || 2.5,
-    };
-  });
+  return Array.from(container.querySelectorAll('.slot-row')).map(row => ({
+    weekday:  (row.querySelector('.slot-weekday')||{}).value || 'Saturday',
+    fromTime: (row.querySelector('.slot-from')||{}).value   || '09:00',
+    toTime:   (row.querySelector('.slot-to')||{}).value     || '11:45',
+    duration: parseFloat((row.querySelector('.slot-dur')||{}).value) || 2.5,
+  }));
 }
 
-function openSectionModal(mode, idx) {
-  const sec = (mode!=='add') ? State.sections[idx] : null;
+function openSectionModal(mode, idx, semId) {
+  currentSemId = semId;
+  const sem  = getSem(semId);
+  const sec  = (mode!=='add') ? sem.sections[idx] : null;
   const title = mode==='edit' ? 'Edit Section' : mode==='dup' ? 'Duplicate Section' : 'Add Section';
   openModal(title, sectionModalBody(sec), () => saveSectionModal(mode, idx));
   const slots = sec ? sec.slots : [{weekday:'Saturday',fromTime:'09:00',toTime:'11:45',duration:2.5}];
@@ -347,77 +661,163 @@ function openSectionModal(mode, idx) {
 
 function saveSectionModal(mode, editIdx) {
   clearModalError();
+  const sem  = getSem(currentSemId);
   const name = document.getElementById('sec-name').value.trim();
-  if(!name){ showModalError('Section name is required.'); return; }
+  if (!name) { showModalError('Section name is required.'); return; }
   const slots = readSlots('slots-container');
-  if(!slots.length){ showModalError('At least one slot is required.'); return; }
+  if (!slots.length) { showModalError('At least one slot is required.'); return; }
   const obj = {name, slots};
-  const dup = State.sections.find((s,i) => s.name===name && (mode==='add'||mode==='dup'||i!==editIdx));
-  if(dup){ showModalError(`Section "${name}" already exists.`); return; }
-  if(mode==='edit') {
-    const oldName = State.sections[editIdx].name;
-    if(oldName !== name) {
-      // Update all section mappings referencing this section
-      State.sectionMappings.forEach(m => {
-        if(m.section === oldName) m.section = name;
+  const dup = sem.sections.find((s,i) => s.name===name && (mode==='add'||mode==='dup'||i!==editIdx));
+  if (dup) { showModalError(`Section "${name}" already exists.`); return; }
+  if (mode==='edit') {
+    const oldName = sem.sections[editIdx].name;
+    if (oldName !== name) {
+      sem.sectionMappings.forEach(m => { if (m.section===oldName) m.section=name; });
+      sem.courseConflicts.forEach(group => {
+        const i = group.sections.indexOf(oldName);
+        if (i !== -1) group.sections[i] = name;
       });
-      saveSectionMapping();
-      // Update all conflict groups referencing this section
-      State.courseConflicts.forEach(group => {
-        const idx = group.sections.indexOf(oldName);
-        if(idx !== -1) group.sections[idx] = name;
-      });
-      saveConflicts();
     }
-    State.sections[editIdx] = obj;
+    sem.sections[editIdx] = obj;
+  } else {
+    sem.sections.push(obj);
   }
-  else State.sections.push(obj);
-  saveSection(); renderSections(); renderMappings(); renderConflicts();
-  closeModal(); toast(`Section "${name}" saved.`,'success');
+  saveSemesters();
+  renderSections(currentSemId);
+  renderMappings(currentSemId);
+  renderConflicts(currentSemId);
+  closeModal();
+  toast(`Section "${name}" saved.`, 'success');
 }
 
-
-function areaSlotRowHTML(slot, idx) {
-  return sectionSlotRowHTML(slot, idx, 'area');
+function deleteSection(idx, semId) {
+  currentSemId = semId;
+  const sem = getSem(semId);
+  const s   = sem.sections[idx];
+  confirm2('Delete Section',
+    `Delete section "${s.name}"? Mappings using this section will also be removed.`,
+    () => {
+      sem.sectionMappings = sem.sectionMappings.filter(m => m.section!==s.name);
+      const toDelete = [];
+      let modified = 0;
+      sem.courseConflicts.forEach((group, gi) => {
+        const si = group.sections.indexOf(s.name);
+        if (si !== -1) {
+          group.sections.splice(si, 1);
+          if (group.sections.length < 2) toDelete.push(gi); else modified++;
+        }
+      });
+      toDelete.reverse().forEach(di => sem.courseConflicts.splice(di, 1));
+      sem.sections.splice(idx, 1);
+      saveSemesters();
+      renderSections(semId); renderMappings(semId); renderConflicts(semId);
+      toast(`Section "${s.name}" deleted.`, 'warning');
+      if (toDelete.length) toast(`${toDelete.length} conflict group(s) removed.`, 'info');
+      if (modified)        toast(`${modified} conflict group(s) updated.`, 'info');
+    });
 }
+
+function renderSections(semId) {
+  const sem = getSem(semId);
+  const el  = document.getElementById(`${semId}-sections-list`);
+  if (!el || !sem) return;
+  if (!sem.sections.length) {
+    el.innerHTML = `<div class="empty-state"><div class="empty-icon">🗓</div><p>No sections added yet.</p></div>`;
+    return;
+  }
+  el.innerHTML = `<div class="table-wrap"><table class="data-table">
+    <thead><tr><th>Name</th><th>Slots</th><th style="width:120px">Actions</th></tr></thead>
+    <tbody>${sem.sections.map((s,i)=>`<tr>
+      <td><span class="badge badge-gold">${s.name}</span></td>
+      <td style="font-size:.8rem;color:var(--text2)">${s.slots.map(sl=>
+        `<span class="badge badge-grey" style="margin:.1rem">${sl.weekday.slice(0,3)} ${sl.fromTime}</span>`
+      ).join(' ')}</td>
+      <td>
+        <button class="btn btn-ghost btn-icon btn-sm" title="Edit"
+          onclick="openSectionModal('edit',${i},'${semId}')">✎</button>
+        <button class="btn btn-ghost btn-icon btn-sm" title="Duplicate"
+          onclick="openSectionModal('dup',${i},'${semId}')">⎘</button>
+        <button class="btn btn-danger btn-icon btn-sm" title="Delete"
+          onclick="deleteSection(${i},'${semId}')">✕</button>
+      </td>
+    </tr>`).join('')}</tbody>
+  </table></div>`;
+}
+
+function setConfigMode(semId, mode) {
+  const sem = getSem(semId);
+  if (!sem) return;
+  sem.configMode = mode;
+  saveSemesters();
+  updateConfigModeUI(semId);
+  renderSections(semId); renderAreas(semId); renderCourses(semId);
+  renderMappings(semId); renderConflicts(semId);
+}
+
+function updateConfigModeUI(semId) {
+  const sem = getSem(semId);
+  if (!sem) return;
+  const areaMode = sem.configMode === 'areas';
+  const g = id => document.getElementById(`${semId}-${id}`);
+
+  const sw = g('sections-config-wrap'), aw = g('areas-config-wrap');
+  if (sw) sw.style.display = areaMode ? 'none' : 'block';
+  if (aw) aw.style.display = areaMode ? 'block' : 'none';
+
+  const mTitle = g('mapping-title'), mDesc = g('mapping-desc');
+  const cTitle = g('conflict-title'), cDesc = g('conflict-desc');
+  if (mTitle) mTitle.textContent = areaMode ? 'Course-Faculty Mapping' : 'Section-Course-Faculty Mapping';
+  if (mDesc)  mDesc.textContent  = areaMode
+    ? 'Assign faculty to teach specific courses.'
+    : 'Assign faculty to teach specific courses for specific sections.';
+  if (cTitle) cTitle.textContent = areaMode ? '⛔ Course Conflict Groups' : '⛔ Course Conflict Groups (Tracks)';
+  if (cDesc)  cDesc.textContent  = areaMode
+    ? 'Courses in the same group will never be scheduled at the same time slot.'
+    : 'Courses in the same group will never be scheduled at the same time slot, even across different sections.';
+}
+
+// ─── AREAS CRUD ───────────────────────────────────────────────
+function areaSlotRowHTML(slot, idx) { return sectionSlotRowHTML(slot, idx, 'area'); }
 
 let _areaDateCounter = 0;
 function areaExcludedDateRowHTML(val, idx) {
-  const minDate = State.startDate || '';
-  const maxDate = State.endDate || '';
+  const sem = getSem(currentSemId);
+  const minDate = sem ? sem.startDate : '';
+  const maxDate = sem ? sem.endDate   : '';
   return `<div id="area-date-row-${idx}" style="display:flex;gap:.5rem;margin-bottom:.4rem;align-items:center">
-    <input type="date" class="area-excluded-date" value="${val || ''}"${minDate ? ` min="${minDate}"` : ''}${maxDate ? ` max="${maxDate}"` : ''} style="flex:1;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:.45rem .65rem;border-radius:var(--r);font-family:var(--font-u);font-size:.85rem"/>
+    <input type="date" class="area-excluded-date" value="${val||''}"
+      ${minDate?`min="${minDate}"`:''}${maxDate?` max="${maxDate}"`:''}
+      style="flex:1;background:var(--surface);border:1px solid var(--border);color:var(--text);
+        padding:.45rem .65rem;border-radius:var(--r);font-family:var(--font-u);font-size:.85rem"/>
     <button class="btn btn-danger btn-icon btn-sm" onclick="removeAreaDateRow(${idx})">✕</button>
   </div>`;
 }
 
 function addAreaDateRow(val='') {
-  const container = document.getElementById('area-excluded-container');
-  if(!container) return;
+  const c = document.getElementById('area-excluded-container');
+  if (!c) return;
   const idx = _areaDateCounter++;
   const div = document.createElement('div');
   div.innerHTML = areaExcludedDateRowHTML(val, idx);
-  container.appendChild(div.firstElementChild);
+  c.appendChild(div.firstElementChild);
 }
 
 function removeAreaDateRow(idx) {
-  const el = document.getElementById('area-date-row-'+idx);
-  if(el) el.remove();
+  const el = document.getElementById(`area-date-row-${idx}`);
+  if (el) el.remove();
 }
 
 function readExcludedDates(containerId='area-excluded-container') {
-  const container = document.getElementById(containerId);
-  if(!container) return [];
-  return Array.from(container.querySelectorAll('.area-excluded-date'))
-    .map(input => input.value)
-    .filter(Boolean);
+  const c = document.getElementById(containerId);
+  if (!c) return [];
+  return Array.from(c.querySelectorAll('.area-excluded-date')).map(i=>i.value).filter(Boolean);
 }
 
 function areaModalBody(area) {
-  _slotCounter = 0;
-  _areaDateCounter = 0;
-  const minDate = State.startDate || '';
-  const maxDate = State.endDate || '';
+  _slotCounter = 0; _areaDateCounter = 0;
+  const sem = getSem(currentSemId);
+  const minDate = sem ? sem.startDate : '';
+  const maxDate = sem ? sem.endDate   : '';
   return `
     <div class="modal-error" id="modal-err"></div>
     <div class="form-row">
@@ -433,560 +833,426 @@ function areaModalBody(area) {
     <hr class="form-divider"/>
     <div class="slots-label">Weekday Slot Pairs</div>
     <div id="area-slots-container"></div>
-    <button class="btn btn-ghost btn-sm" style="margin-top:.4rem" onclick="addSlotRow(null, 'area-slots-container', 'area')">+ Add Slot</button>
+    <button class="btn btn-ghost btn-sm" style="margin-top:.4rem"
+      onclick="addSlotRow(null,'area-slots-container','area')">+ Add Slot</button>
     <hr class="form-divider"/>
     <div class="slots-label">Excluded Dates</div>
     <p style="font-size:.77rem;color:var(--muted);margin:.15rem 0 .6rem;line-height:1.5">
-      Select dates within the teaching period to exclude them from this area.
-      ${minDate && maxDate ? `<br/>Allowed range: ${minDate} to ${maxDate}.` : 'Set the teaching period to constrain excluded dates.'}
+      Select dates within the teaching period to exclude from this area.
+      ${minDate&&maxDate ? `Allowed range: ${minDate} to ${maxDate}.` : 'Set the teaching period to constrain excluded dates.'}
     </p>
     <div id="area-excluded-container"></div>
     <button class="btn btn-ghost btn-sm" style="margin-top:.4rem" onclick="addAreaDateRow('')">+ Add Date</button>`;
 }
 
-function openAreaModal(mode, idx) {
-  const area = (mode !== 'add') ? State.areas[idx] : null;
-  const title = mode === 'edit' ? 'Edit Area' : 'Add Area';
-  openModal(title, areaModalBody(area), () => saveAreaModal(mode, idx));
+function openAreaModal(mode, idx, semId) {
+  currentSemId = semId;
+  const sem  = getSem(semId);
+  const area = (mode !== 'add') ? sem.areas[idx] : null;
+  openModal(mode==='edit'?'Edit Area':'Add Area', areaModalBody(area), () => saveAreaModal(mode, idx));
   const slots = area ? area.slots : [{weekday:'Saturday',fromTime:'09:00',toTime:'11:45',duration:2.5}];
-  const excludedDates = area ? (area.excludedDates || []) : [];
+  (area ? area.excludedDates||[] : []).forEach(d => addAreaDateRow(d));
   slots.forEach(s => addSlotRow(s, 'area-slots-container', 'area'));
-  excludedDates.forEach(d => addAreaDateRow(d));
 }
 
 function saveAreaModal(mode, editIdx) {
   clearModalError();
-  const name = document.getElementById('area-name').value.trim();
+  const sem       = getSem(currentSemId);
+  const name      = document.getElementById('area-name').value.trim();
   const shortName = document.getElementById('area-short').value.trim();
-  if(!name || !shortName){ showModalError('Area name and short name are required.'); return; }
-
+  if (!name||!shortName) { showModalError('Area name and short name are required.'); return; }
   const slots = readSlots('area-slots-container');
-  if(!slots.length){ showModalError('At least one weekday-slot pair is required.'); return; }
-
+  if (!slots.length) { showModalError('At least one weekday-slot pair is required.'); return; }
   const excludedDates = readExcludedDates('area-excluded-container');
-  if(excludedDates.length && (!State.startDate || !State.endDate)) {
-    showModalError('Set the teaching period before adding excluded dates.');
-    return;
+  if (excludedDates.length && (!sem.startDate||!sem.endDate)) {
+    showModalError('Set the teaching period before adding excluded dates.'); return;
   }
-  if(excludedDates.length && State.startDate && State.endDate) {
-    const start = State.startDate;
-    const end = State.endDate;
-    const outOfRange = excludedDates.find(date => date < start || date > end);
-    if(outOfRange) {
-      showModalError(`Excluded date ${outOfRange} must fall within the teaching period.`);
-      return;
-    }
+  if (excludedDates.length && sem.startDate && sem.endDate) {
+    const bad = excludedDates.find(d => d<sem.startDate||d>sem.endDate);
+    if (bad) { showModalError(`Excluded date ${bad} is outside the teaching period.`); return; }
   }
-
-  const dup = State.areas.find((a, i) => a.shortName === shortName && (mode === 'add' || i !== editIdx));
-  if(dup){ showModalError(`Area short name "${shortName}" already exists.`); return; }
-
+  const dup = sem.areas.find((a,i) => a.shortName===shortName && (mode==='add'||i!==editIdx));
+  if (dup) { showModalError(`Area short name "${shortName}" already exists.`); return; }
   const obj = {name, shortName, slots, excludedDates};
-  if(mode === 'edit') {
-    const oldArea = State.areas[editIdx];
-    if(oldArea && oldArea.shortName !== shortName) {
-      State.courses.forEach(course => {
-        if(course.areaShortName === oldArea.shortName) course.areaShortName = shortName;
-      });
-      saveCourse();
-    }
-    State.areas[editIdx] = obj;
-  } else {
-    State.areas.push(obj);
-  }
-
-  saveArea();
-  renderAreas();
-  renderCourses();
-  closeModal();
-  toast(`Area "${shortName}" saved.`, 'success');
+  if (mode==='edit') {
+    const oldArea = sem.areas[editIdx];
+    if (oldArea && oldArea.shortName!==shortName)
+      sem.courses.forEach(c => { if (c.areaShortName===oldArea.shortName) c.areaShortName=shortName; });
+    sem.areas[editIdx] = obj;
+  } else { sem.areas.push(obj); }
+  saveSemesters();
+  renderAreas(currentSemId); renderCourses(currentSemId);
+  closeModal(); toast(`Area "${shortName}" saved.`, 'success');
 }
 
-function deleteArea(idx) {
-  const area = State.areas[idx];
-  const linkedCourses = State.courses.filter(course => course.areaShortName === area.shortName);
-  confirm2('Delete Area', `Delete area "${area.shortName}"? ${linkedCourses.length ? `${linkedCourses.length} course(s) will be cleared.` : ''}`, () => {
-    let clearedCourses = 0;
-    State.courses.forEach(course => {
-      if(course.areaShortName === area.shortName) {
-        course.areaShortName = '';
-        clearedCourses++;
-      }
+function deleteArea(idx, semId) {
+  currentSemId = semId;
+  const sem  = getSem(semId);
+  const area = sem.areas[idx];
+  const linked = sem.courses.filter(c => c.areaShortName===area.shortName);
+  confirm2('Delete Area',
+    `Delete area "${area.shortName}"?${linked.length?' '+linked.length+' course(s) will be cleared.':''}`,
+    () => {
+      let cleared = 0;
+      sem.courses.forEach(c => { if (c.areaShortName===area.shortName) { c.areaShortName=''; cleared++; } });
+      sem.areas.splice(idx, 1);
+      saveSemesters();
+      renderAreas(semId); renderCourses(semId);
+      toast(`Area "${area.shortName}" deleted.`, 'warning');
+      if (cleared) toast(`${cleared} course(s) cleared.`, 'info');
     });
-    if(clearedCourses) saveCourse();
-
-    State.areas.splice(idx, 1);
-    saveArea();
-    renderAreas();
-    renderCourses();
-    toast(`Area "${area.shortName}" deleted.`, 'warning');
-    if(clearedCourses) toast(`${clearedCourses} course(s) were cleared from the deleted area.`, 'info');
-  });
 }
 
-function renderAreas() {
-  const el = document.getElementById('areas-list');
-  if(!el) return;
-  if(!State.areas.length) {
+function renderAreas(semId) {
+  const sem = getSem(semId);
+  const el  = document.getElementById(`${semId}-areas-list`);
+  if (!el || !sem) return;
+  if (!sem.areas.length) {
     el.innerHTML = `<div class="empty-state"><div class="empty-icon">🧭</div><p>No areas added yet.</p></div>`;
     return;
   }
-
-  const courseCount = Object.fromEntries(State.areas.map(area => [area.shortName, 0]));
-  State.courses.forEach(course => {
-    if(course.areaShortName && courseCount[course.areaShortName] !== undefined) {
-      courseCount[course.areaShortName] += 1;
-    }
-  });
-
+  const cnt = Object.fromEntries(sem.areas.map(a=>[a.shortName,0]));
+  sem.courses.forEach(c => { if (c.areaShortName && cnt[c.areaShortName]!==undefined) cnt[c.areaShortName]++; });
   el.innerHTML = `<div class="table-wrap"><table class="data-table">
     <thead><tr><th>Name</th><th>Short</th><th>Slot Pairs</th><th>Excluded Dates</th><th>Courses</th><th style="width:120px">Actions</th></tr></thead>
-    <tbody>${State.areas.map((area, i) => `
-      <tr>
-        <td>${area.name}</td>
-        <td><span class="badge badge-gold" style="font-family:var(--font-m)">${area.shortName}</span></td>
-        <td style="font-size:.8rem;color:var(--text2)">${(area.slots || []).map(slot => `<span class="badge badge-grey" style="margin:.1rem">${slot.weekday.slice(0,3)} ${slot.fromTime}</span>`).join(' ')}</td>
-        <td style="font-size:.8rem;color:var(--text2)">${(area.excludedDates || []).length ? (area.excludedDates || []).map(date => `<span class="badge badge-grey" style="margin:.1rem">${date}</span>`).join(' ') : '<span style="color:var(--muted)">None</span>'}</td>
-        <td><span class="badge badge-blue">${courseCount[area.shortName] || 0}</span></td>
-        <td>
-          <button class="btn btn-ghost btn-icon btn-sm" title="Edit" onclick="openAreaModal('edit', ${i})">✎</button>
-          <button class="btn btn-danger btn-icon btn-sm" title="Delete" onclick="deleteArea(${i})">✕</button>
-        </td>
-      </tr>
-    `).join('')}</tbody>
-  </table></div>`;
-}
-function deleteSection(idx) {
-  const s = State.sections[idx];
-  confirm2('Delete Section', `Delete section "${s.name}"? Mappings using this section will also be removed.`, () => {
-    // Delete section mappings
-    State.sectionMappings = State.sectionMappings.filter(m=>m.section!==s.name);
-    saveSectionMapping();
-    
-    // Handle conflict groups
-    const groupsToDelete = [];
-    let modifiedGroupsCount = 0;
-    State.courseConflicts.forEach((group, groupIdx) => {
-      const secIdx = group.sections.indexOf(s.name);
-      if(secIdx !== -1) {
-        group.sections.splice(secIdx, 1);
-        // Delete group if fewer than 2 sections remain
-        if(group.sections.length < 2) {
-          groupsToDelete.push(groupIdx);
-        } else {
-          modifiedGroupsCount++;
-        }
-      }
-    });
-    // Delete groups in reverse order to avoid index shifts
-    groupsToDelete.reverse().forEach(deleteIdx => {
-      State.courseConflicts.splice(deleteIdx, 1);
-    });
-    saveConflicts();
-    
-    // Delete section
-    State.sections.splice(idx,1); 
-    saveSection(); 
-    renderSections(); 
-    renderMappings();
-    renderConflicts();
-    
-    // Toast messages
-    toast(`Section "${s.name}" deleted.`,'warning');
-    if(groupsToDelete.length > 0) {
-      toast(`${groupsToDelete.length} conflict group(s) removed (insufficient sections).`,'info');
-    }
-    if(modifiedGroupsCount > 0) {
-      toast(`${modifiedGroupsCount} conflict group(s) updated.`,'info');
-    }
-  });
-}
-
-function renderSections() {
-  const el = document.getElementById('sections-list');
-  if(!State.sections.length){
-    el.innerHTML = `<div class="empty-state"><div class="empty-icon">🗓</div><p>No sections added yet.</p></div>`;
-    return;
-  }
-  el.innerHTML = `<div class="table-wrap"><table class="data-table">
-    <thead><tr><th>Name</th><th>Slots</th><th style="width:120px">Actions</th></tr></thead>
-    <tbody>${State.sections.map((s,i)=>`<tr>
-      <td><span class="badge badge-gold">${s.name}</span></td>
-      <td style="font-size:.8rem;color:var(--text2)">${s.slots.map(sl=>`<span class="badge badge-grey" style="margin:.1rem">${sl.weekday.slice(0,3)} ${sl.fromTime}</span>`).join(' ')}</td>
+    <tbody>${sem.areas.map((area,i)=>`<tr>
+      <td>${area.name}</td>
+      <td><span class="badge badge-gold" style="font-family:var(--font-m)">${area.shortName}</span></td>
+      <td style="font-size:.8rem;color:var(--text2)">${(area.slots||[]).map(sl=>
+        `<span class="badge badge-grey" style="margin:.1rem">${sl.weekday.slice(0,3)} ${sl.fromTime}</span>`
+      ).join(' ')}</td>
+      <td style="font-size:.8rem;color:var(--text2)">${(area.excludedDates||[]).length
+        ? (area.excludedDates||[]).map(d=>`<span class="badge badge-grey" style="margin:.1rem">${d}</span>`).join(' ')
+        : '<span style="color:var(--muted)">None</span>'}</td>
+      <td><span class="badge badge-blue">${cnt[area.shortName]||0}</span></td>
       <td>
-        <button class="btn btn-ghost btn-icon btn-sm" title="Edit" onclick="openSectionModal('edit',${i})">✎</button>
-        <button class="btn btn-ghost btn-icon btn-sm" title="Duplicate" onclick="openSectionModal('dup',${i})">⎘</button>
-        <button class="btn btn-danger btn-icon btn-sm" title="Delete" onclick="deleteSection(${i})">✕</button>
+        <button class="btn btn-ghost btn-icon btn-sm" title="Edit"
+          onclick="openAreaModal('edit',${i},'${semId}')">✎</button>
+        <button class="btn btn-danger btn-icon btn-sm" title="Delete"
+          onclick="deleteArea(${i},'${semId}')">✕</button>
       </td>
     </tr>`).join('')}</tbody>
   </table></div>`;
 }
 
-document.getElementById('add-section-btn').addEventListener('click', ()=>openSectionModal('add',null));
-
-// COURSES CRUD
+// ─── COURSES CRUD ─────────────────────────────────────────────
 function courseModalBody(c) {
-  const areaMode = isAreaMode();
-  const areaOptions = areaMode
-    ? (State.areas.length
-      ? [`<option value="">-- Select Area --</option>`, ...State.areas.map(area => `<option value="${area.shortName}"${c&&c.areaShortName===area.shortName?' selected':''}>${area.shortName} - ${area.name}</option>`)].join('')
-      : `<option value="">-- No Areas Defined --</option>`)
+  const sem      = getSem(currentSemId);
+  const areaMode = sem ? sem.configMode==='areas' : false;
+  const areas    = sem ? sem.areas : [];
+  const areaOpts = areaMode
+    ? (areas.length
+        ? `<option value="">-- Select Area --</option>` + areas.map(a=>
+            `<option value="${a.shortName}"${c&&c.areaShortName===a.shortName?' selected':''}>${a.shortName} - ${a.name}</option>`
+          ).join('')
+        : `<option value="">-- No Areas Defined --</option>`)
     : '';
   return `
     <div class="modal-error" id="modal-err"></div>
     <div class="form-row">
-      <div class="form-group"><label>Course Code</label><input type="text" id="c-code" placeholder="e.g. P-201" value="${c?c.code:''}"/></div>
-      <div class="form-group"><label>Short Title</label><input type="text" id="c-short" placeholder="e.g. OR" value="${c?c.shortTitle:''}"/></div>
+      <div class="form-group"><label>Course Code</label>
+        <input type="text" id="c-code" placeholder="e.g. P-201" value="${c?c.code:''}"/></div>
+      <div class="form-group"><label>Short Title</label>
+        <input type="text" id="c-short" placeholder="e.g. OR" value="${c?c.shortTitle:''}"/></div>
     </div>
     <div class="form-row">
-      <div class="form-group" style="flex:2"><label>Course Title</label><input type="text" id="c-title" placeholder="e.g. Operations Research" value="${c?c.title:''}"/></div>
+      <div class="form-group" style="flex:2"><label>Course Title</label>
+        <input type="text" id="c-title" placeholder="e.g. Operations Research" value="${c?c.title:''}"/></div>
     </div>
     ${areaMode ? `
     <div class="form-row">
-      <div class="form-group" style="flex:2"><label>Area</label><select id="c-area">${areaOptions}</select></div>
-      <div class="form-group"><label>Max Sessions / Month</label><input type="number" id="c-max-month" min="0" step="1" value="${c&&c.maxSessionsPerMonth!=null?c.maxSessionsPerMonth:4}"/></div>
+      <div class="form-group" style="flex:2"><label>Area</label>
+        <select id="c-area">${areaOpts}</select></div>
+      <div class="form-group"><label>Max Sessions / Month</label>
+        <input type="number" id="c-max-month" min="0" step="1"
+          value="${c&&c.maxSessionsPerMonth!=null?c.maxSessionsPerMonth:4}"/></div>
     </div>` : ''}
     <div class="form-row">
-      <div class="form-group"><label>Credit</label><input type="number" id="c-credit" min="0" step="0.5" value="${c?c.credit:2}"/></div>
-      <div class="form-group"><label>Duration (hrs)</label><input type="number" id="c-duration" min="0" step="0.5" value="${c?c.duration:20}"/></div>
-      <div class="form-group"><label>Required Slots</label><input type="number" id="c-slots" min="1" value="${c?c.requiredSlots:8}"/></div>
+      <div class="form-group"><label>Credit</label>
+        <input type="number" id="c-credit" min="0" step="0.5" value="${c?c.credit:2}"/></div>
+      <div class="form-group"><label>Duration (hrs)</label>
+        <input type="number" id="c-duration" min="0" step="0.5" value="${c?c.duration:20}"/></div>
+      <div class="form-group"><label>Required Slots</label>
+        <input type="number" id="c-slots" min="1" value="${c?c.requiredSlots:8}"/></div>
     </div>`;
 }
 
-function openCourseModal(mode, idx) {
-  const c = (mode!=='add') ? State.courses[idx] : null;
+function openCourseModal(mode, idx, semId) {
+  currentSemId = semId;
+  const sem = getSem(semId);
+  const c   = (mode!=='add') ? sem.courses[idx] : null;
   const title = mode==='edit'?'Edit Course':mode==='dup'?'Duplicate Course':'Add Course';
-  openModal(title, courseModalBody(c), ()=>saveCourseModal(mode,idx));
+  openModal(title, courseModalBody(c), () => saveCourseModal(mode, idx));
 }
 
 function saveCourseModal(mode, editIdx) {
   clearModalError();
-  const code  = document.getElementById('c-code').value.trim();
-  const title = document.getElementById('c-title').value.trim();
-  const short = document.getElementById('c-short').value.trim();
+  const sem    = getSem(currentSemId);
+  const code   = document.getElementById('c-code').value.trim();
+  const title  = document.getElementById('c-title').value.trim();
+  const short  = document.getElementById('c-short').value.trim();
   const credit = parseFloat(document.getElementById('c-credit').value)||0;
   const dur    = parseFloat(document.getElementById('c-duration').value)||0;
   const slots  = parseInt(document.getElementById('c-slots').value)||0;
-  if(!code||!title){ showModalError('Course code and title are required.'); return; }
+  if (!code||!title) { showModalError('Course code and title are required.'); return; }
+  const areaMode = sem.configMode==='areas';
   const obj = {
-    ...(mode==='edit' ? (State.courses[editIdx] || {}) : {}),
-    code,
-    title,
-    shortTitle: short,
-    credit,
-    duration: dur,
-    requiredSlots: slots,
+    ...(mode==='edit'?(sem.courses[editIdx]||{}):{} ),
+    code, title, shortTitle:short, credit, duration:dur, requiredSlots:slots,
   };
-  if (isAreaMode()) {
-    obj.areaShortName = document.getElementById('c-area').value;
-    obj.maxSessionsPerMonth = parseInt(document.getElementById('c-max-month').value) || 0;
-  } else if (mode === 'add') {
-    delete obj.areaShortName;
-    delete obj.maxSessionsPerMonth;
-  }
-  const dup = State.courses.find((c,i)=>c.code===code&&(mode==='add'||mode==='dup'||i!==editIdx));
-  if(dup){ showModalError(`Course code "${code}" already exists.`); return; }
-  if(mode==='edit') State.courses[editIdx]=obj;
-  else State.courses.push(obj);
-  saveCourse(); renderCourses();
-  closeModal(); toast(`Course "${code}" saved.`,'success');
+  if (areaMode) {
+    obj.areaShortName       = document.getElementById('c-area').value;
+    obj.maxSessionsPerMonth = parseInt(document.getElementById('c-max-month').value)||0;
+  } else if (mode==='add') { delete obj.areaShortName; delete obj.maxSessionsPerMonth; }
+  const dup = sem.courses.find((c,i)=>c.code===code&&(mode==='add'||mode==='dup'||i!==editIdx));
+  if (dup) { showModalError(`Course code "${code}" already exists.`); return; }
+  if (mode==='edit') sem.courses[editIdx]=obj; else sem.courses.push(obj);
+  saveSemesters(); renderCourses(currentSemId);
+  closeModal(); toast(`Course "${code}" saved.`, 'success');
 }
 
-function deleteCourse(idx) {
-  const c = State.courses[idx];
-  confirm2('Delete Course', `Delete "${c.code}"? Mappings using this course will also be removed.`, ()=>{
-    State.sectionMappings = State.sectionMappings.filter(m=>m.courseCode!==c.code);
-    State.areaMappings = State.areaMappings.filter(m=>m.courseCode!==c.code);
-    saveSectionMapping();
-    saveAreaMapping();
-    State.courses.splice(idx,1); saveCourse(); renderCourses(); renderMappings();
-    toast(`Course "${c.code}" deleted.`,'warning');
+function deleteCourse(idx, semId) {
+  currentSemId = semId;
+  const sem = getSem(semId);
+  const c   = sem.courses[idx];
+  confirm2('Delete Course', `Delete "${c.code}"? Mappings using this course will also be removed.`, () => {
+    sem.sectionMappings = sem.sectionMappings.filter(m=>m.courseCode!==c.code);
+    sem.areaMappings    = sem.areaMappings.filter(m=>m.courseCode!==c.code);
+    sem.courses.splice(idx, 1);
+    saveSemesters(); renderCourses(semId); renderMappings(semId);
+    toast(`Course "${c.code}" deleted.`, 'warning');
   });
 }
 
-function renderCourses() {
-  const el = document.getElementById('courses-list');
-  if(!State.courses.length){
+function renderCourses(semId) {
+  const sem = getSem(semId);
+  const el  = document.getElementById(`${semId}-courses-list`);
+  if (!el || !sem) return;
+  if (!sem.courses.length) {
     el.innerHTML = `<div class="empty-state"><div class="empty-icon">📚</div><p>No courses added yet.</p></div>`;
     return;
   }
-  const areaMode = isAreaMode();
-  const areaMap = Object.fromEntries(State.areas.map(area => [area.shortName, area]));
+  const areaMode = sem.configMode==='areas';
+  const areaMap  = Object.fromEntries(sem.areas.map(a=>[a.shortName,a]));
   el.innerHTML = `<div class="table-wrap"><table class="data-table">
-    <thead><tr><th>Code</th><th>Title</th><th>Short</th>${areaMode ? '<th>Area</th>' : ''}<th>Credit</th><th>Req Slots</th>${areaMode ? '<th>Max Monthly</th>' : ''}<th style="width:120px">Actions</th></tr></thead>
-    <tbody>${State.courses.map((c,i)=>`<tr>
+    <thead><tr><th>Code</th><th>Title</th><th>Short</th>${areaMode?'<th>Area</th>':''}
+      <th>Credit</th><th>Req Slots</th>${areaMode?'<th>Max Monthly</th>':''}
+      <th style="width:120px">Actions</th></tr></thead>
+    <tbody>${sem.courses.map((c,i)=>`<tr>
       <td><span class="badge badge-blue" style="font-family:var(--font-m)">${c.code}</span></td>
       <td>${c.title}</td>
       <td><span class="badge badge-grey">${c.shortTitle||'—'}</span></td>
-      ${areaMode ? `<td><span class="badge badge-gold" style="font-family:var(--font-m)">${areaMap[c.areaShortName]?areaMap[c.areaShortName].shortName:'—'}</span></td>` : ''}
+      ${areaMode?`<td><span class="badge badge-gold" style="font-family:var(--font-m)">${areaMap[c.areaShortName]?areaMap[c.areaShortName].shortName:'—'}</span></td>`:''}
       <td>${c.credit}</td>
       <td><span class="badge badge-gold">${c.requiredSlots}</span></td>
-      ${areaMode ? `<td><span class="badge badge-blue">${c.maxSessionsPerMonth || 0}</span></td>` : ''}
+      ${areaMode?`<td><span class="badge badge-blue">${c.maxSessionsPerMonth||0}</span></td>`:''}
       <td>
-        <button class="btn btn-ghost btn-icon btn-sm" title="Edit" onclick="openCourseModal('edit',${i})">✎</button>
-        <button class="btn btn-ghost btn-icon btn-sm" title="Duplicate" onclick="openCourseModal('dup',${i})">⎘</button>
-        <button class="btn btn-danger btn-icon btn-sm" title="Delete" onclick="deleteCourse(${i})">✕</button>
+        <button class="btn btn-ghost btn-icon btn-sm" title="Edit"
+          onclick="openCourseModal('edit',${i},'${semId}')">✎</button>
+        <button class="btn btn-ghost btn-icon btn-sm" title="Duplicate"
+          onclick="openCourseModal('dup',${i},'${semId}')">⎘</button>
+        <button class="btn btn-danger btn-icon btn-sm" title="Delete"
+          onclick="deleteCourse(${i},'${semId}')">✕</button>
       </td>
     </tr>`).join('')}</tbody>
   </table></div>`;
 }
 
-document.getElementById('add-course-btn').addEventListener('click',()=>openCourseModal('add',null));
-document.getElementById('add-area-btn').addEventListener('click',()=>openAreaModal('add',null));
-
-// COURSES CONFLICTS CRUD
-function saveConflicts() { set(KEY.conflicts, State.courseConflicts); touchConfig(); }
-
-function renderConflicts() {
-  const el = document.getElementById('conflicts-list');
-  if (!el) return;
-  const areaMode = isAreaMode();
-  const visibleGroups = getVisibleConflictGroups().map(group => ({
-    group,
-    originalIndex: State.courseConflicts.indexOf(group),
-  }));
-  if (!visibleGroups.length) {
-    el.innerHTML = `<div style="font-size:.82rem;color:var(--muted);padding:.4rem 0">No conflict groups defined.</div>`;
-    return;
-  }
-  const cMap = Object.fromEntries(State.courses.map(c => [c.code, c]));
-  el.innerHTML = visibleGroups.map(({group, originalIndex}, i) => {
-    const allSections = State.sections.map(s => s.name);
-    const groupSections = group.sections || [];
-    const isAllSections = !areaMode &&
-      groupSections.length === allSections.length &&
-      groupSections.every(s => allSections.includes(s));
-
-    return `
-      <div class="slot-row" style="align-items:center;flex-wrap:wrap;gap:.5rem;margin-bottom:.5rem">
-        
-        <span style="font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;flex-shrink:0">
-          Group ${i+1}
-        </span>
-
-        <!-- COURSES -->
-        <div style="display:flex;flex-wrap:wrap;gap:.35rem;flex:1">
-          ${group.courses.map(code => {
-            const c = cMap[code];
-            return `<span class="badge badge-blue" style="font-family:var(--font-m)">
-              ${c ? c.shortTitle || code : code}
-            </span>`;
-          }).join('')}
-        </div>
-
-        <!-- SECTIONS -->
-        ${areaMode ? '' : `<div style="display:flex;flex-wrap:wrap;gap:.35rem;flex:1">
-          ${
-            isAllSections
-              ? `<span class="badge badge-grey">All Sections</span>`
-              : groupSections.map(sec => `
-                  <span class="badge badge-grey">Sec ${sec}</span>
-                `).join('')
-          }
-        </div>`}
-
-        <button class="btn btn-ghost btn-icon btn-sm" title="Edit group" onclick="openConflictModal(${originalIndex})">✎</button>
-        <button class="btn btn-danger btn-icon btn-sm" title="Delete group" onclick="deleteConflictGroup(${originalIndex})">✕</button>
-      </div>`;
-  }).join('');
-}
-
+// ─── COURSE CONFLICTS CRUD ────────────────────────────────────
 function conflictModalBody(groupIdx) {
-  const group = groupIdx === null ? {courses:[], sections:[]} : (State.courseConflicts[groupIdx] || {courses:[], sections:[]});
-  const courseSet = new Set(group.courses);
-  const sectionSet = new Set(group.sections);
-  const areaMode = isAreaMode();
-
-  if (!State.courses.length) return `<p>No courses defined yet.</p>`;
-
+  const sem      = getSem(currentSemId);
+  if (!sem) return '';
+  const areaMode  = sem.configMode==='areas';
+  const group     = groupIdx===null ? null : sem.courseConflicts[groupIdx];
+  const selC      = new Set(group ? group.courses       : []);
+  const selS      = new Set(group ? (group.sections||[]) : []);
   return `
     <div class="modal-error" id="modal-err"></div>
-
-    <p style="font-size:.82rem;color:var(--text2)">Select courses:</p>
-    <div style="display:flex;flex-direction:column;gap:.3rem;margin-bottom:1rem">
-      ${State.courses.map(c => `
-        <label>
-          <input type="checkbox" class="conflict-course-chk" value="${c.code}" ${courseSet.has(c.code)?'checked':''}>
-          ${c.shortTitle || c.code} - ${c.title}
-        </label>
-      `).join('')}
-    </div>
-
-    ${areaMode ? '' : `
-    <p style="font-size:.82rem;color:var(--text2)">Select sections:</p>
-    <div style="display:flex;flex-direction:column;gap:.3rem">
-      ${State.sections.map(s => `
-        <label>
-          <input type="checkbox" class="conflict-section-chk" value="${s.name}" ${sectionSet.has(s.name)?'checked':''}>
-          Section ${s.name}
-        </label>
-      `).join('')}
-    </div>
-    `}
-  `;
+    <div class="slots-label">Courses (select at least 2)</div>
+    ${!sem.courses.length
+      ? '<p style="color:var(--muted);font-size:.82rem">No courses defined.</p>'
+      : sem.courses.map(c => `
+          <label style="display:flex;align-items:center;gap:.5rem;padding:.3rem 0;font-size:.85rem;cursor:pointer">
+            <input type="checkbox" class="conflict-course-chk" value="${c.code}" ${selC.has(c.code)?'checked':''}>
+            <span class="badge badge-blue" style="font-family:var(--font-m)">${c.shortTitle||c.code}</span>
+            <span style="color:var(--text2)">${c.title}</span>
+          </label>`).join('')}
+    ${!areaMode ? `
+    <hr class="form-divider"/>
+    <div class="slots-label">Sections (select at least 2)</div>
+    ${!sem.sections.length
+      ? '<p style="color:var(--muted);font-size:.82rem">No sections defined.</p>'
+      : sem.sections.map(s => `
+          <label style="display:flex;align-items:center;gap:.5rem;padding:.3rem 0;font-size:.85rem;cursor:pointer">
+            <input type="checkbox" class="conflict-section-chk" value="${s.name}" ${selS.has(s.name)?'checked':''}>
+            <span class="badge badge-gold">${s.name}</span>
+          </label>`).join('')}` : ''}`;
 }
 
-function openConflictModal(groupIdx) {
-  const title = groupIdx === null ? 'Add Conflict Group' : 'Edit Conflict Group';
-  openModal(title, conflictModalBody(groupIdx), () => saveConflictModal(groupIdx));
+function openConflictModal(groupIdx, semId) {
+  currentSemId = semId;
+  openModal(groupIdx===null?'Add Conflict Group':'Edit Conflict Group',
+    conflictModalBody(groupIdx), () => saveConflictModal(groupIdx));
 }
 
 function saveConflictModal(groupIdx) {
   clearModalError();
-
-  const selectedCourses = [...document.querySelectorAll('.conflict-course-chk:checked')].map(el => el.value);
-  const selectedSections = [...document.querySelectorAll('.conflict-section-chk:checked')].map(el => el.value);
-  const areaMode = isAreaMode();
-
-  if (selectedCourses.length < 2) {
-    showModalError('Select at least 2 courses for a conflict group.');
-    return;
-  }
-  if (!areaMode && selectedSections.length < 2) {
-    showModalError('Select at least 2 sections.');
-    return;
-  }
-
-  const existing = groupIdx === null ? {courses:[], sections:[]} : (State.courseConflicts[groupIdx] || {courses:[], sections:[]});
-  const obj = {
-    ...existing,
-    courses: selectedCourses,
-    // In area mode conflict groups are defined only by courses.
-    sections: areaMode ? [] : selectedSections,
-  };
-
-  if (groupIdx === null) State.courseConflicts.push(obj);
-  else State.courseConflicts[groupIdx] = obj;
-
-  saveConflicts();
-  renderConflicts();
-  closeModal();
-  toast('Conflict group saved.', 'success');
+  const sem      = getSem(currentSemId);
+  const areaMode = sem.configMode==='areas';
+  const selC = [...document.querySelectorAll('.conflict-course-chk:checked')].map(e=>e.value);
+  const selS = [...document.querySelectorAll('.conflict-section-chk:checked')].map(e=>e.value);
+  if (selC.length < 2)           { showModalError('Select at least 2 courses.');  return; }
+  if (!areaMode && selS.length<2){ showModalError('Select at least 2 sections.'); return; }
+  const existing = groupIdx===null ? {courses:[],sections:[]} : (sem.courseConflicts[groupIdx]||{courses:[],sections:[]});
+  const obj = {...existing, courses:selC, sections:areaMode?[]:selS};
+  if (groupIdx===null) sem.courseConflicts.push(obj); else sem.courseConflicts[groupIdx]=obj;
+  saveSemesters(); renderConflicts(currentSemId); closeModal(); toast('Conflict group saved.','success');
 }
 
-function deleteConflictGroup(i) {
+function deleteConflictGroup(i, semId) {
+  currentSemId = semId;
+  const sem = getSem(semId);
   confirm2('Delete Conflict Group', 'Remove this conflict group?', () => {
-    State.courseConflicts.splice(i, 1);
-    saveConflicts(); renderConflicts();
-    toast('Conflict group removed.', 'warning');
+    sem.courseConflicts.splice(i, 1);
+    saveSemesters(); renderConflicts(semId); toast('Conflict group removed.','warning');
   });
 }
 
-document.getElementById('add-conflict-btn').addEventListener('click', () => openConflictModal(null));
+function renderConflicts(semId) {
+  const sem = getSem(semId);
+  const el  = document.getElementById(`${semId}-conflicts-list`);
+  if (!el || !sem) return;
+  const areaMode = sem.configMode==='areas';
+  const visible  = sem.courseConflicts
+    .map((group, oi) => ({group, oi}))
+    .filter(({group}) => areaMode ? (!group.sections||!group.sections.length)
+                                  : !!(group.sections&&group.sections.length));
+  if (!visible.length) {
+    el.innerHTML = `<div style="font-size:.82rem;color:var(--muted);padding:.4rem 0">No conflict groups defined.</div>`;
+    return;
+  }
+  const cMap = Object.fromEntries(sem.courses.map(c=>[c.code,c]));
+  el.innerHTML = visible.map(({group, oi}, vi) => {
+    const allSecs     = sem.sections.map(s=>s.name);
+    const grpSecs     = group.sections||[];
+    const isAllSecs   = !areaMode && grpSecs.length===allSecs.length && grpSecs.every(s=>allSecs.includes(s));
+    return `
+      <div class="slot-row" style="align-items:center;flex-wrap:wrap;gap:.5rem;margin-bottom:.5rem">
+        <span style="font-size:.75rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;flex-shrink:0">
+          Group ${vi+1}
+        </span>
+        <div style="display:flex;flex-wrap:wrap;gap:.35rem;flex:1">
+          ${group.courses.map(code=>{const c=cMap[code];
+            return `<span class="badge badge-blue" style="font-family:var(--font-m)">${c?c.shortTitle||code:code}</span>`;
+          }).join('')}
+        </div>
+        ${!areaMode?`
+        <div style="display:flex;flex-wrap:wrap;gap:.3rem;align-items:center">
+          <span style="font-size:.73rem;color:var(--muted);flex-shrink:0">Sections:</span>
+          ${isAllSecs
+            ? `<span class="badge badge-gold">All</span>`
+            : grpSecs.map(s=>`<span class="badge badge-grey" style="font-family:var(--font-m)">${s}</span>`).join('')}
+        </div>`:''}
+        <div style="display:flex;gap:.3rem;flex-shrink:0;margin-left:auto">
+          <button class="btn btn-ghost btn-icon btn-sm" title="Edit"
+            onclick="openConflictModal(${oi},'${semId}')">✎</button>
+          <button class="btn btn-danger btn-icon btn-sm" title="Delete"
+            onclick="deleteConflictGroup(${oi},'${semId}')">✕</button>
+        </div>
+      </div>`;
+  }).join('');
+}
 
-// FACULTY CRUD
+// ─── FACULTY CRUD ─────────────────────────────────────────────
 let _dateCounter = 0;
 
-// Compute available slot options for a given date (filters by mappings when possible)
-// If no mappings exist, return all slots for the date from all sections/areas
+// ── Slot helpers (use currentSemId – modal-only context) ──────
 function getAvailableSlotOptionsForDate(facShort, dateStr) {
-  if (!dateStr) return [];
+  const sem = getSem(currentSemId);
+  if (!sem || !dateStr) return [];
   const d = new Date(dateStr + 'T00:00:00');
   if (isNaN(d)) return [];
   const weekday = WEEKDAYS[d.getDay()];
-  const opts = [];
-  const seen = new Set();
-
-  if (isSectionMode()) {
-    State.sections.forEach(sec => {
-      // If mappings exist, only include slots for sections where faculty teaches; otherwise include all
-      if (State.sectionMappings.length > 0) {
-        const teachesInSection = State.sectionMappings.some(m => m.section === sec.name && m.facultyShortName === facShort);
-        if (!teachesInSection && facShort) return;
+  const opts = [], seen = new Set();
+  const areaMode = sem.configMode==='areas';
+  if (!areaMode) {
+    sem.sections.forEach(sec => {
+      if (sem.sectionMappings.length > 0) {
+        const ok = sem.sectionMappings.some(m=>m.section===sec.name&&m.facultyShortName===facShort);
+        if (!ok && facShort) return;
       }
-      for (const sl of sec.slots || []) {
-        if (sl.weekday !== weekday) continue;
-        if (State.startDate && State.endDate && (dateStr < State.startDate || dateStr > State.endDate)) continue;
-        const key = `${sl.fromTime}||${sl.toTime}`;
-        if (!seen.has(key)) { seen.add(key); opts.push({value:key, label:`${sl.fromTime} – ${sl.toTime}`}); }
+      for (const sl of sec.slots||[]) {
+        if (sl.weekday!==weekday) continue;
+        if (sem.startDate&&sem.endDate&&(dateStr<sem.startDate||dateStr>sem.endDate)) continue;
+        const k=`${sl.fromTime}||${sl.toTime}`;
+        if (!seen.has(k)) { seen.add(k); opts.push({value:k, label:`${sl.fromTime} – ${sl.toTime}`}); }
       }
     });
   } else {
-    State.areas.forEach(area => {
-      // respect excludedDates
-      if (Array.isArray(area.excludedDates) && area.excludedDates.includes(dateStr)) return;
-      // If mappings exist, only include slots for areas where faculty teaches; otherwise include all
-      if (State.areaMappings.length > 0) {
-        const teachesInArea = State.areaMappings.some(m => {
-          const course = State.courses.find(c => c.code === m.courseCode);
-          return m.facultyShortName === facShort && course && course.areaShortName === area.shortName;
+    sem.areas.forEach(area => {
+      if (Array.isArray(area.excludedDates)&&area.excludedDates.includes(dateStr)) return;
+      if (sem.areaMappings.length > 0) {
+        const ok = sem.areaMappings.some(m=>{
+          const c=sem.courses.find(c=>c.code===m.courseCode);
+          return m.facultyShortName===facShort&&c&&c.areaShortName===area.shortName;
         });
-        if (!teachesInArea && facShort) return;
+        if (!ok && facShort) return;
       }
-      for (const sl of area.slots || []) {
-        if (sl.weekday !== weekday) continue;
-        if (State.startDate && State.endDate && (dateStr < State.startDate || dateStr > State.endDate)) continue;
-        const key = `${sl.fromTime}||${sl.toTime}`;
-        if (!seen.has(key)) { seen.add(key); opts.push({value:key, label:`${sl.fromTime} – ${sl.toTime}`}); }
+      for (const sl of area.slots||[]) {
+        if (sl.weekday!==weekday) continue;
+        if (sem.startDate&&sem.endDate&&(dateStr<sem.startDate||dateStr>sem.endDate)) continue;
+        const k=`${sl.fromTime}||${sl.toTime}`;
+        if (!seen.has(k)) { seen.add(k); opts.push({value:k, label:`${sl.fromTime} – ${sl.toTime}`}); }
       }
     });
   }
-  // fallback: if no slots found, return empty (caller may show toast)
   return opts.sort((a,b)=>a.label.localeCompare(b.label));
 }
 
-// Return set of weekdays (strings) that the faculty teaches based on mappings and slots
-// If no mappings exist, return all weekdays from all sections/areas
 function getAllowedWeekdaysForFaculty(facShort) {
+  const sem  = getSem(currentSemId);
   const days = new Set();
-  if (!facShort) return days;
-  if (isSectionMode()) {
-    if (State.sectionMappings.length > 0) {
-      // Mappings exist: filter by sections where faculty teaches
-      const secs = State.sectionMappings.filter(m => m.facultyShortName === facShort).map(m => m.section);
-      secs.forEach(sname => {
-        const sec = State.sections.find(s => s.name === sname);
-        if (!sec) return;
-        (sec.slots || []).forEach(sl => days.add(sl.weekday));
+  if (!sem || !facShort) return days;
+  const areaMode = sem.configMode==='areas';
+  if (!areaMode) {
+    if (sem.sectionMappings.length > 0) {
+      sem.sectionMappings.filter(m=>m.facultyShortName===facShort).map(m=>m.section).forEach(sname=>{
+        const sec=sem.sections.find(s=>s.name===sname);
+        if (sec) (sec.slots||[]).forEach(sl=>days.add(sl.weekday));
       });
-    } else {
-      // No mappings: faculty can teach all sections
-      State.sections.forEach(sec => {
-        (sec.slots || []).forEach(sl => days.add(sl.weekday));
-      });
-    }
+    } else { sem.sections.forEach(sec=>(sec.slots||[]).forEach(sl=>days.add(sl.weekday))); }
   } else {
-    if (State.areaMappings.length > 0) {
-      // Mappings exist: filter by areas where faculty teaches
-      const courses = State.areaMappings.filter(m => m.facultyShortName === facShort).map(m => m.courseCode);
-      courses.forEach(code => {
-        const course = State.courses.find(c => c.code === code);
-        if (!course) return;
-        const area = State.areas.find(a => a.shortName === course.areaShortName);
-        if (!area) return;
-        (area.slots || []).forEach(sl => days.add(sl.weekday));
+    if (sem.areaMappings.length > 0) {
+      sem.areaMappings.filter(m=>m.facultyShortName===facShort).map(m=>m.courseCode).forEach(code=>{
+        const course=sem.courses.find(c=>c.code===code); if (!course) return;
+        const area=sem.areas.find(a=>a.shortName===course.areaShortName); if (!area) return;
+        (area.slots||[]).forEach(sl=>days.add(sl.weekday));
       });
-    } else {
-      // No mappings: faculty can teach all areas
-      State.areas.forEach(area => {
-        (area.slots || []).forEach(sl => days.add(sl.weekday));
-      });
-    }
+    } else { sem.areas.forEach(area=>(area.slots||[]).forEach(sl=>days.add(sl.weekday))); }
   }
   return days;
 }
 
-// Return list of allowed date strings (YYYY-MM-DD) between teaching period matching faculty weekdays and area excludedDates
 function getAllowedDatesForFaculty(facShort) {
+  const sem = getSem(currentSemId);
   const allowed = [];
-  if (!State.startDate || !State.endDate) return allowed;
+  if (!sem||!sem.startDate||!sem.endDate) return allowed;
   const wkdays = getAllowedWeekdaysForFaculty(facShort);
-  if (!wkdays || wkdays.size === 0) return allowed;
-  const s = new Date(State.startDate + 'T00:00:00');
-  const e = new Date(State.endDate + 'T00:00:00');
-  for (let d = new Date(s); d <= e; d.setDate(d.getDate()+1)) {
-    const wd = WEEKDAYS[d.getDay()];
-    if (!wkdays.has(wd)) continue;
+  if (!wkdays.size) return allowed;
+  const areaMode = sem.configMode==='areas';
+  for (let d=new Date(sem.startDate+'T00:00:00'), e=new Date(sem.endDate+'T00:00:00'); d<=e; d.setDate(d.getDate()+1)) {
+    if (!wkdays.has(WEEKDAYS[d.getDay()])) continue;
     const ds = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-    if (!isSectionMode()) {
-      // in area mode, ensure none of the relevant areas exclude this date
-      const courses = State.areaMappings.filter(m => m.facultyShortName === facShort).map(m => m.courseCode);
+    if (areaMode) {
       const areasSeen = new Set();
-      courses.forEach(code => { const course = State.courses.find(c=>c.code===code); if (course && course.areaShortName) areasSeen.add(course.areaShortName); });
-      let excluded = false;
-      areasSeen.forEach(as => {
-        const area = State.areas.find(a => a.shortName === as);
-        if (area && Array.isArray(area.excludedDates) && area.excludedDates.includes(ds)) excluded = true;
+      sem.areaMappings.filter(m=>m.facultyShortName===facShort).forEach(m=>{
+        const c=sem.courses.find(c=>c.code===m.courseCode);
+        if (c&&c.areaShortName) areasSeen.add(c.areaShortName);
+      });
+      let excluded=false;
+      areasSeen.forEach(as=>{
+        const area=sem.areas.find(a=>a.shortName===as);
+        if (area&&Array.isArray(area.excludedDates)&&area.excludedDates.includes(ds)) excluded=true;
       });
       if (excluded) continue;
     }
@@ -995,188 +1261,150 @@ function getAllowedDatesForFaculty(facShort) {
   return allowed;
 }
 
-function getUsedSlotsFromUI(date, excludeRow = null) {
-  const rows = document.querySelectorAll('#unavail-container > div');
+function getUsedSlotsFromUI(date, excludeRow=null) {
   const used = [];
-
-  rows.forEach(div => {
-    if (excludeRow && div === excludeRow) return;
-
+  document.querySelectorAll('#unavail-container > div').forEach(div => {
+    if (excludeRow && div===excludeRow) return;
     const dateEl = div.querySelector('.unavail-date');
     const slotEl = div.querySelector('.unavail-slot');
-
-    if (!dateEl || !slotEl) return;
-
-    if (dateEl.value === date && slotEl.value) {
-      used.push(slotEl.value);
-    }
+    if (!dateEl||!slotEl) return;
+    if (dateEl.value===date && slotEl.value) used.push(slotEl.value);
   });
-
   return used;
 }
 
-function addUnavailRow(val={date:'', fromTime:'', toTime:''}) {
+function addUnavailRow(val={date:'',fromTime:'',toTime:''}) {
   const c = document.getElementById('unavail-container');
-  // prerequisites: teaching period and slots must exist
-  if (!State.startDate || !State.endDate) { toast('Set teaching period before adding unavailable slots.','warning'); return; }
-  if (isSectionMode() && !State.sections.length) { toast('Add sections and their slots before marking unavailable slots.','warning'); return; }
-  if (!isSectionMode() && !State.areas.length) { toast('Add areas and their slots before marking unavailable slots.','warning'); return; }
+  const sem = getSem(currentSemId);
+  if (!sem||!sem.startDate||!sem.endDate) { toast('Set teaching period before adding unavailable slots.','warning'); return; }
+  if (sem.configMode!=='areas'&&!sem.sections.length) { toast('Add sections before marking unavailable slots.','warning'); return; }
+  if (sem.configMode==='areas'&&!sem.areas.length)    { toast('Add areas before marking unavailable slots.','warning');    return; }
 
   const idx = _dateCounter++;
   const div = document.createElement('div');
   div.id = 'date-row-'+idx;
-  div.style.cssText = 'display:flex;gap:.5rem;margin-bottom:.4rem;align-items:center;flex-wrap: wrap;';
-  
-  const dateVal = val && val.date ? val.date : '';
-  const ftVal = val && val.fromTime ? val.fromTime : '';
-  const ttVal = val && val.toTime ? val.toTime : '';
-  div.dataset.slotKey = ftVal && ttVal ? `${ftVal}||${ttVal}` : '';
-  // build date select filtered by allowed dates for current faculty
+  div.style.cssText = 'display:flex;gap:.5rem;margin-bottom:.4rem;align-items:center;flex-wrap:wrap;';
+
+  const dateVal=val&&val.date?val.date:'', ftVal=val&&val.fromTime?val.fromTime:'', ttVal=val&&val.toTime?val.toTime:'';
+  div.dataset.slotKey = ftVal&&ttVal?`${ftVal}||${ttVal}`:'';
+
   const facShortEl = document.getElementById('f-short');
-  const facShort = facShortEl ? facShortEl.value.trim() : '';
-  const allowedDates = getAllowedDatesForFaculty(facShort).filter(date => {
-    const opts = getAvailableSlotOptionsForDate(facShort, date).map(o => o.value);
+  const facShort   = facShortEl ? facShortEl.value.trim() : '';
+  const allowedDates = getAllowedDatesForFaculty(facShort).filter(date=>{
+    const opts = getAvailableSlotOptionsForDate(facShort, date).map(o=>o.value);
     const used = getUsedSlotsFromUI(date);
     return opts.length > used.length;
   });
-  const dateOptions = allowedDates.map(d => {
-    const dt = new Date(d + 'T00:00:00');
-    const label = `${d} (${WEEKDAYS[dt.getDay()]})`;
-    return `<option value="${d}">${label}</option>`;
+  const dateOptions = allowedDates.map(d=>{
+    const dt=new Date(d+'T00:00:00');
+    return `<option value="${d}">${d} (${WEEKDAYS[dt.getDay()]})</option>`;
   }).join('');
   div.innerHTML = `
-    <select class="unavail-date" style="flex:1;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:.45rem .65rem;border-radius:var(--r);font-family:var(--font-u);font-size:.85rem">` +
-      `<option value="">(select date)</option>` + dateOptions +
-    `</select>
-    <select class="unavail-slot" style="flex:1;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:.45rem .65rem;border-radius:var(--r);font-family:var(--font-u);font-size:.85rem; min-width:150px">` +
-      `<option value="">(select slot)</option>` +
-    `</select>
+    <select class="unavail-date" style="flex:1;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:.45rem .65rem;border-radius:var(--r);font-family:var(--font-u);font-size:.85rem">
+      <option value="">(select date)</option>${dateOptions}
+    </select>
+    <select class="unavail-slot" style="flex:1;background:var(--surface);border:1px solid var(--border);color:var(--text);padding:.45rem .65rem;border-radius:var(--r);font-family:var(--font-u);font-size:.85rem;min-width:150px">
+      <option value="">(select slot)</option>
+    </select>
     <button class="btn btn-danger btn-icon btn-sm" onclick="document.getElementById('date-row-${idx}').remove()">✕</button>`;
-
   c.appendChild(div);
 
   const dateInput = div.querySelector('.unavail-date');
-  const slotSelect = div.querySelector('.unavail-slot');
+  const slotSelect= div.querySelector('.unavail-slot');
 
-  function refreshOptionsForDate(dateVal, currentRow) {
-    const facShortEl2 = document.getElementById('f-short');
-    const facShort2 = facShortEl2 ? facShortEl2.value.trim() : '';
+  function refreshOpts(dv, row) {
+    const fs2  = (document.getElementById('f-short')||{}).value||'';
+    const opts = getAvailableSlotOptionsForDate(fs2, dv);
 
-    const opts = getAvailableSlotOptionsForDate(facShort2, dateVal);
-
-    const used = new Set(getUsedSlotsFromUI(dateVal, currentRow));
-
-    const filtered = opts.filter(o => !used.has(o.value));
-
-    const currentValue = slotSelect.value || currentRow.dataset.slotKey;
-
-    slotSelect.innerHTML =
-      '<option value="">(select slot)</option>' +
-      filtered.map(o => `<option value="${o.value}">${o.label}</option>`).join('');
-
-    // restore selection
-    if (currentValue && filtered.some(o => o.value === currentValue)) {
-      slotSelect.value = currentValue;
-    }
+    const used = new Set(getUsedSlotsFromUI(dv, row));
+    const filtered = opts.filter(o=>!used.has(o.value));
+    const cur = slotSelect.value || row.dataset.slotKey;
+    slotSelect.innerHTML = '<option value="">(select slot)</option>'+
+      filtered.map(o=>`<option value="${o.value}">${o.label}</option>`).join('');
+    if (cur && filtered.some(o=>o.value===cur)) slotSelect.value=cur;
   }
 
   dateInput.addEventListener('change', () => {
-    const val = dateInput.value;
-    if (!val) return;
-    const facShortEl2 = document.getElementById('f-short');
-    const facShort2 = facShortEl2 ? facShortEl2.value.trim() : '';
-    const allowed = getAllowedDatesForFaculty(facShort2);
-    if (allowed.length && !allowed.includes(val)) {
-      toast('Selected date is not valid for this faculty (no matching slots).','warning');
-      dateInput.value = '';
-      slotSelect.innerHTML = '<option value="">(select slot)</option>';
-      return;
+    const dv=dateInput.value; if (!dv) return;
+    const allowed=getAllowedDatesForFaculty((document.getElementById('f-short')||{}).value||'');
+
+    if (allowed.length && !allowed.includes(dv)) {
+      toast('Selected date is not valid for this faculty.','warning');
+      dateInput.value=''; slotSelect.innerHTML='<option value="">(select slot)</option>'; return;
     }
-    refreshOptionsForDate(val, div);
-    if (!slotSelect.options.length || slotSelect.options.length === 1) {
-      toast('No defined slots fall on this date (or mappings filter them out).','warning');
-    }
-  });
-  // also handle input events (for some browsers/UX flows)
-  dateInput.addEventListener('input', () => {
-    const evt = new Event('change'); dateInput.dispatchEvent(evt);
+    refreshOpts(dv, div);
+    if (slotSelect.options.length<=1) toast('No defined slots fall on this date.','warning');
   });
 
-  // populate initially if value present
+  dateInput.addEventListener('input', ()=>dateInput.dispatchEvent(new Event('change')));
+
+  slotSelect.addEventListener('change', ()=>{ 
+    if (dateInput.value) refreshOpts(dateInput.value, div); 
+  });
+
   if (dateVal) {
-    // ensure dateVal is in allowed list; if not, ignore
-    const facShortEl3 = document.getElementById('f-short');
-    const facShort3 = facShortEl3 ? facShortEl3.value.trim() : '';
-    const allowed3 = getAllowedDatesForFaculty(facShort3);
+    const allowed3=getAllowedDatesForFaculty((document.getElementById('f-short')||{}).value||'');
     if (!allowed3.length || allowed3.includes(dateVal)) {
-      dateInput.value = dateVal;
-      refreshOptionsForDate(dateVal, div);
-
-      // AFTER OPTIONS ARE LOADED → restore slot
-      const key = ftVal && ttVal ? `${ftVal}||${ttVal}` : '';
-      setTimeout(() => {
-        if (key) {
-          slotSelect.value = key;
-          div.dataset.slotKey = key;
-        }
+      dateInput.value=dateVal;
+      refreshOpts(dateVal, div);
+      setTimeout(()=>{ 
+        const k=ftVal&&ttVal?`${ftVal}||${ttVal}`:''; 
+        if(k){slotSelect.value=k;div.dataset.slotKey=k;} 
       }, 0);
     }
   }
-
-  // Make slot select reactive
-  slotSelect.addEventListener('change', () => {
-    const dateVal = dateInput.value;
-    if (dateVal) {
-      refreshOptionsForDate(dateVal, div);
-    }
-  });
 }
 
 function facultyModalBody(f) {
   _dateCounter = 0;
   return `
-    <div class="modal-error" id="modal-err"></div>
+    <div class="modal-error" id="modal-err"></div>     
     <div class="form-row">
-      <div class="form-group" style="flex:2"><label>Full Name</label><input type="text" id="f-full" placeholder="e.g. Prof. Prashant N Reddy" value="${f?f.fullName:''}"/></div>
+      <div class="form-group" style="flex:2">
+        <label>Full Name</label>
+        <input type="text" id="f-full" placeholder="e.g. Prof. Prashant N Reddy" value="${f?f.fullName:''}"/>
+      </div>
     </div>
     <div class="form-row">
-      <div class="form-group"><label>Short Name</label><input type="text" id="f-short" placeholder="e.g. Prof PNR" value="${f?f.shortName:''}"/></div>
-      <div class="form-group"><label>Max Load / Day</label><input type="number" id="f-load" min="1" max="10" value="${f?f.maxLoadPerDay:2}"/></div>
+      <div class="form-group">
+        <label>Short Name</label>
+        <input type="text" id="f-short" placeholder="e.g. Prof PNR" value="${f?f.shortName:''}"/>
+      </div>
+      <div class="form-group">
+        <label>Max Load / Day</label>
+        <input type="number" id="f-load" min="1" max="10" value="${f?f.maxLoadPerDay:2}"/>
+      </div>
     </div>
     <hr class="form-divider"/>
     <div class="slots-label">Unavailable Time Slots</div>
     <div id="unavail-container"></div>
-    <button class="btn btn-ghost btn-sm" style="margin-top:.4rem" onclick="addUnavailRow({})">+ Add Time Slot</button>`;
+    <button class="btn btn-ghost btn-sm" style="margin-top:.4rem" onclick="addUnavailRow({})">
+      + Add Time Slot
+    </button>`;
 }
 
-function openFacultyModal(mode, idx) {
-  const f = (mode!=='add') ? State.faculty[idx] : null;
-  const title = mode==='edit'?'Edit Faculty':'Add Faculty';
-  openModal(title, facultyModalBody(f), ()=>saveFacultyModal(mode,idx));
+function openFacultyModal(mode, idx, semId) {
+  currentSemId = semId;
+  const sem = getSem(semId);
+  const f   = (mode!=='add') ? sem.faculty[idx] : null;
+  openModal(mode==='edit'?'Edit Faculty':'Add Faculty', facultyModalBody(f), ()=>saveFacultyModal(mode, idx));
+
   if (f) {
-    // normalize legacy unavailableDates -> unavailableSlots
-    const slots = f.unavailableSlots || (f.unavailableDates ? f.unavailableDates.map(d=>({date:d, fromTime:'', toTime:''})) : []);
-    slots.forEach(s => addUnavailRow(s));
+    const slots = f.unavailableSlots||(f.unavailableDates?f.unavailableDates.map(d=>({date:d,fromTime:'',toTime:''})):[]);
+    slots.forEach(s=>addUnavailRow(s));
   }
-  // attach change handler to refresh date selects when faculty short name is edited in modal
+
   const fShortEl = document.getElementById('f-short');
   if (fShortEl) {
     fShortEl.addEventListener('change', () => {
-      const rows = document.querySelectorAll('#unavail-container > div');
-      rows.forEach(div => {
-        const dateSel = div.querySelector('.unavail-date');
-        if (!dateSel) return;
-        const prev = dateSel.value;
-        const opts = getAllowedDatesForFaculty(fShortEl.value.trim());
-        dateSel.innerHTML = '<option value="">(select date)</option>' +
-          opts.map(d => {
-            const dt = new Date(d + 'T00:00:00');
-            const label = `${d} (${WEEKDAYS[dt.getDay()]})`;
-            return `<option value="${d}">${label}</option>`;
+      document.querySelectorAll('#unavail-container > div').forEach(div=>{
+        const dateSel=div.querySelector('.unavail-date'); if (!dateSel) return;
+        const prev=dateSel.value;
+        const opts=getAllowedDatesForFaculty(fShortEl.value.trim());
+        dateSel.innerHTML='<option value="">(select date)</option>'+ 
+          opts.map(d=>{const dt=new Date(d+'T00:00:00');
+            return `<option value="${d}"${d===prev?' selected':''}>${d} (${WEEKDAYS[dt.getDay()]})</option>`;
           }).join('');
-        if (opts.includes(prev)) dateSel.value = prev; else dateSel.value = '';
-        // trigger change to refresh slots
-        const evt = new Event('change'); dateSel.dispatchEvent(evt);
       });
     });
   }
@@ -1184,191 +1412,191 @@ function openFacultyModal(mode, idx) {
 
 function saveFacultyModal(mode, editIdx) {
   clearModalError();
+  const sem   = getSem(currentSemId);
   const full  = document.getElementById('f-full').value.trim();
   const short = document.getElementById('f-short').value.trim();
   const load  = parseInt(document.getElementById('f-load').value)||2;
-  const rows = document.querySelectorAll('#unavail-container > div');
-  for (const div of rows) {
-    const dateEl = div.querySelector('.unavail-date');
-    const slotEl = div.querySelector('.unavail-slot');
 
-    const date = dateEl?.value;
-    const slot = slotEl?.value;
+  if (!full||!short) { showModalError('Full name and short name are required.'); return; }
 
-    // CASE: date selected but slot missing
-    if (date && !slot) {
-      showModalError('For each unavailable date, either select a time slot or remove the date entry.');
-      return;
-    }
-  }
-  const slots = Array.from(document.querySelectorAll('#unavail-container .slot-row, #unavail-container > div'))
-    .map(div => {
-      const dateEl = div.querySelector('.unavail-date');
-      const slotEl = div.querySelector('.unavail-slot');
-      if (!dateEl) return null;
-      const date = dateEl.value;
-      if (!date) return null;
-      if (!slotEl || !slotEl.value) {
-        return null; // invalid entry should not be saved
-      }
-      const parts = slotEl.value.split('||');
-      return { date, fromTime: parts[0]||'', toTime: parts[1]||'' };
-    }).filter(Boolean);
-  if(!full||!short){ showModalError('Full name and short name are required.'); return; }
-  const obj = {fullName:full, shortName:short, maxLoadPerDay:load, unavailableSlots:slots};
-  const dup = State.faculty.find((f,i)=>f.shortName===short&&(mode==='add'||i!==editIdx));
-  if(dup){ showModalError(`Faculty short name "${short}" already exists.`); return; }
-  if(mode==='edit') State.faculty[editIdx]=obj;
-  else State.faculty.push(obj);
-  saveFaculty(); renderFaculty();
-  closeModal(); toast(`Faculty "${short}" saved.`,'success');
+  const unavailableSlots = Array.from(document.querySelectorAll('#unavail-container > div')).map(div=>{
+    const dEl=div.querySelector('.unavail-date'), sEl=div.querySelector('.unavail-slot');
+    if (!dEl||!sEl||!dEl.value||!sEl.value) return null;
+    const [fromTime,toTime]=sEl.value.split('||');
+    
+    return {date:dEl.value, fromTime:fromTime||'', toTime:toTime||''};
+  }).filter(Boolean);
+
+  const obj = {fullName:full, shortName:short, maxLoadPerDay:load, unavailableSlots};
+  const dup = sem.faculty.find((f,i)=>f.shortName===short&&(mode==='add'||i!==editIdx));
+
+  if (dup) { showModalError(`Short name "${short}" already exists.`); return; }
+
+  if (mode==='edit') sem.faculty[editIdx]=obj; else sem.faculty.push(obj);
+
+  saveSemesters(); 
+  renderFaculty(currentSemId); 
+  renderMappings(currentSemId);
+  closeModal(); 
+  toast(`Faculty "${short}" saved.`, 'success');
 }
 
-function deleteFaculty(idx) {
-  const f = State.faculty[idx];
-  confirm2('Delete Faculty',`Delete "${f.shortName}"? Mappings using this faculty will also be removed.`,()=>{
-    State.sectionMappings = State.sectionMappings.filter(m=>m.facultyShortName!==f.shortName);
-    State.areaMappings = State.areaMappings.filter(m=>m.facultyShortName!==f.shortName);
-    saveSectionMapping();
-    saveAreaMapping();
-    State.faculty.splice(idx,1); saveFaculty(); renderFaculty(); renderMappings();
-    toast(`Faculty "${f.shortName}" deleted.`,'warning');
+function deleteFaculty(idx, semId) {
+  currentSemId = semId;
+  const sem = getSem(semId);
+  const f   = sem.faculty[idx];
+
+  confirm2('Delete Faculty', `Delete "${f.fullName}"?`, () => {
+    sem.sectionMappings = sem.sectionMappings.filter(m=>m.facultyShortName!==f.shortName);
+    sem.areaMappings    = sem.areaMappings.filter(m=>m.facultyShortName!==f.shortName);
+    sem.faculty.splice(idx, 1);
+    saveSemesters(); 
+    renderFaculty(semId); 
+    renderMappings(semId);
+    toast(`Faculty "${f.shortName}" deleted.`, 'warning');
   });
 }
 
-function renderFaculty() {
-  const el = document.getElementById('faculty-list');
-  if(!State.faculty.length){
+function renderFaculty(semId) {
+  const sem = getSem(semId);
+  const el  = document.getElementById(`${semId}-faculty-list`);
+
+  if (!el || !sem) return;
+
+  if (!sem.faculty.length) {
     el.innerHTML = `<div class="empty-state"><div class="empty-icon">👨‍🏫</div><p>No faculty added yet.</p></div>`;
     return;
   }
-  el.innerHTML = `<div class="table-wrap"><table class="data-table">
-    <thead><tr><th>Full Name</th><th>Short Name</th><th>Max/Day</th><th>Unavailable Dates</th><th style="width:90px">Actions</th></tr></thead>
-    <tbody>${State.faculty.map((f,i)=>`<tr>
-      <td>${f.fullName}</td>
-      <td><span class="badge badge-gold" style="font-family:var(--font-m)">${f.shortName}</span></td>
-      <td style="text-align:center">${f.maxLoadPerDay}</td>
-      <td style="font-size:.78rem;color:var(--text2)">${(Array.isArray(f.unavailableSlots) && f.unavailableSlots.length)? f.unavailableSlots.map(s=>`<span class="badge badge-grey" style="margin:.1rem">${s.date}${s.fromTime?(' ' + s.fromTime + '-' + s.toTime):''}</span>`).join(' '):'<span style="color:var(--muted)">None</span>'}</td>
-      <td>
-        <button class="btn btn-ghost btn-icon btn-sm" title="Edit" onclick="openFacultyModal('edit',${i})">✎</button>
-        <button class="btn btn-danger btn-icon btn-sm" title="Delete" onclick="deleteFaculty(${i})">✕</button>
-      </td>
-    </tr>`).join('')}</tbody>
-  </table></div>`;
+
+  el.innerHTML = 
+  `<div class="table-wrap">
+    <table class="data-table">     
+      <thead><tr><th>Full Name</th><th>Short Name</th><th>Max/Day</th><th>Unavailable Slots</th><th style="width:90px">Actions</th></tr></thead>     
+      <tbody>${sem.faculty.map((f,i)=>`<tr>
+        <td>${f.fullName}</td>
+        <td><span class="badge badge-gold" style="font-family:var(--font-m)">${f.shortName}</span></td>
+        <td style="text-align:center">${f.maxLoadPerDay}</td>
+        <td style="font-size:.78rem;color:var(--text2)">
+          ${(Array.isArray(f.unavailableSlots)&&f.unavailableSlots.length)
+            ? f.unavailableSlots.map(s=>`<span class="badge badge-grey" style="margin:.1rem">${s.date}${s.fromTime?' '+s.fromTime+'-'+s.toTime:''}</span>`).join(' ')
+            : '<span style="color:var(--muted)">None</span>'}</td>
+        <td>
+          <button class="btn btn-ghost btn-icon btn-sm" title="Edit"
+                onclick="openFacultyModal('edit',${i},'${semId}')">✎</button>
+          <button class="btn btn-danger btn-icon btn-sm" title="Delete"
+                onclick="deleteFaculty(${i},'${semId}')">✕</button>
+        </td>
+      </tr>`).join('')}</tbody>
+    </table>
+  </div>`;
 }
 
-document.getElementById('add-faculty-btn').addEventListener('click',()=>openFacultyModal('add',null));
-
-// MAPPING CRUD
+// ─── MAPPING CRUD ─────────────────────────────────────────────
 function mappingModalBody(m) {
-  const areaMode = isAreaMode();
-  const secOpts  = areaMode ? '' : State.sections.map(s=>`<option value="${s.name}"${m&&m.section===s.name?' selected':''}>${s.name}</option>`).join('');
-  const cOpts    = State.courses.map(c=>`<option value="${c.code}"${m&&m.courseCode===c.code?' selected':''}>${c.code} - ${c.title}</option>`).join('');
-  const fOpts    = State.faculty.map(f=>`<option value="${f.shortName}"${m&&m.facultyShortName===f.shortName?' selected':''}>${f.shortName}</option>`).join('');
+  const sem      = getSem(currentSemId);
+  if (!sem) return '';
+  const areaMode = sem.configMode==='areas';
+  const secOpts  = areaMode ? '' : sem.sections.map(s=>
+    `<option value="${s.name}"${m&&m.section===s.name?' selected':''}>${s.name}</option>`).join('');
+  const cOpts = sem.courses.map(c=>
+    `<option value="${c.code}"${m&&m.courseCode===c.code?' selected':''}>${c.code} - ${c.title}</option>`).join('');
+  const fOpts = sem.faculty.map(f=>
+    `<option value="${f.shortName}"${m&&m.facultyShortName===f.shortName?' selected':''}>${f.shortName}</option>`).join('');
   return `
     <div class="modal-error" id="modal-err"></div>
-    ${areaMode ? '' : `<div class="form-row"><div class="form-group"><label>Section</label><select id="m-sec">${secOpts||'<option disabled>No sections</option>'}</select></div></div>`}
-    <div class="form-row"><div class="form-group"><label>Course</label><select id="m-course">${cOpts||'<option disabled>No courses</option>'}</select></div></div>
-    <div class="form-row"><div class="form-group"><label>Faculty</label><select id="m-fac">${fOpts||'<option disabled>No faculty</option>'}</select></div></div>`;
+    ${areaMode?'':`<div class="form-row"><div class="form-group"><label>Section</label>
+      <select id="m-sec">${secOpts||'<option disabled>No sections</option>'}</select></div></div>`}
+    <div class="form-row"><div class="form-group"><label>Course</label>
+      <select id="m-course">${cOpts||'<option disabled>No courses</option>'}</select></div></div>
+    <div class="form-row"><div class="form-group"><label>Faculty</label>
+      <select id="m-fac">${fOpts||'<option disabled>No faculty</option>'}</select></div></div>`;
 }
 
-function openMappingModal(mode, idx) {
-  const areaMode = isAreaMode();
-  const currentMappings = areaMode ? State.areaMappings : State.sectionMappings;
-  const m = (mode!=='add') ? currentMappings[idx] : null;
-  const title = mode==='edit'?'Edit Mapping':mode==='dup'?'Duplicate Mapping':'Add Mapping';
-  if((!isAreaMode() && !State.sections.length) || !State.courses.length || !State.faculty.length){
-    toast(isAreaMode() ? 'Please add areas, courses, and faculty first.' : 'Please add sections, courses, and faculty first.','warning'); return;
+function openMappingModal(mode, idx, semId) {
+  currentSemId = semId;
+  const sem      = getSem(semId);
+  const areaMode = sem.configMode==='areas';
+  const maps     = areaMode ? sem.areaMappings : sem.sectionMappings;
+  const m        = (mode!=='add') ? maps[idx] : null;
+  if ((!areaMode&&!sem.sections.length)||!sem.courses.length||!sem.faculty.length) {
+    toast(areaMode?'Add courses and faculty first.':'Add sections, courses, and faculty first.','warning'); return;
   }
-  openModal(title, mappingModalBody(m), ()=>saveMappingModal(mode,idx));
+  openModal(mode==='edit'?'Edit Mapping':mode==='dup'?'Duplicate Mapping':'Add Mapping',
+    mappingModalBody(m), ()=>saveMappingModal(mode, idx));
 }
 
 function saveMappingModal(mode, editIdx) {
   clearModalError();
-  const areaMode = isAreaMode();
-  const currentMappings = areaMode ? State.areaMappings : State.sectionMappings;
-  const existing = mode==='edit' ? (currentMappings[editIdx] || {}) : {};
-  const secEl = document.getElementById('m-sec');
-  const code = document.getElementById('m-course').value;
-  const fac  = document.getElementById('m-fac').value;
-  const secValue = secEl ? secEl.value : '';
-  if((!areaMode && !secValue) || !code || !fac){ showModalError('All fields are required.'); return; }
-  const obj = { ...existing, courseCode: code, facultyShortName: fac };
-  if(areaMode) {
-    // In area mode mappings are course-faculty only. Ensure no section remains on the object.
-    delete obj.section;
-  } else {
-    obj.section = secValue;
-  }
-  const dup = currentMappings.find((m,i)=>
-    areaMode
-      ? m.courseCode===code && m.facultyShortName===fac && (mode==='add'||mode==='dup'||i!==editIdx)
-      : m.section===secValue && m.courseCode===code && (mode==='add'||mode==='dup'||i!==editIdx)
-  );
-  if(dup){
-    showModalError(areaMode
-      ? `Mapping for ${code} / ${fac} already exists.`
-      : `Mapping for section ${secValue} / ${code} already exists.`);
-    return;
-  }
-  if(mode==='edit') currentMappings[editIdx]=obj;
-  else currentMappings.push(obj);
-  if(areaMode) saveAreaMapping();
-  else saveSectionMapping();
-  renderMappings();
-  closeModal(); toast('Mapping saved.','success');
+  const sem      = getSem(currentSemId);
+  const areaMode = sem.configMode==='areas';
+  const maps     = areaMode ? sem.areaMappings : sem.sectionMappings;
+  const existing = mode==='edit' ? (maps[editIdx]||{}) : {};
+  const secEl    = document.getElementById('m-sec');
+  const code     = document.getElementById('m-course').value;
+  const fac      = document.getElementById('m-fac').value;
+  const secVal   = secEl ? secEl.value : '';
+  if ((!areaMode&&!secVal)||!code||!fac) { showModalError('All fields are required.'); return; }
+  const obj = {...existing, courseCode:code, facultyShortName:fac};
+  if (areaMode) delete obj.section; else obj.section=secVal;
+  const dup = maps.find((m,i)=> areaMode
+    ? m.courseCode===code && m.facultyShortName===fac && (mode==='add'||mode==='dup'||i!==editIdx)
+    : m.section===secVal  && m.courseCode===code      && (mode==='add'||mode==='dup'||i!==editIdx));
+  if (dup) { showModalError(areaMode?`Mapping ${code}/${fac} exists.`:`Mapping ${secVal}/${code} exists.`); return; }
+  if (mode==='edit') maps[editIdx]=obj; else maps.push(obj);
+  saveSemesters(); renderMappings(currentSemId); closeModal(); toast('Mapping saved.','success');
 }
 
-function deleteMapping(idx) {
-  const areaMode = isAreaMode();
-  const msg = areaMode ? 'Remove this course-faculty mapping?' : 'Remove this section-course-faculty mapping?';
-  confirm2('Delete Mapping', msg, ()=>{
-    if(areaMode) {
-      State.areaMappings.splice(idx,1);
-      saveAreaMapping();
-    } else {
-      State.sectionMappings.splice(idx,1);
-      saveSectionMapping();
-    }
-    renderMappings();
-    toast('Mapping removed.','warning');
+function deleteMapping(idx, semId) {
+  currentSemId = semId;
+  const sem      = getSem(semId);
+  const areaMode = sem.configMode==='areas';
+  confirm2('Delete Mapping', areaMode?'Remove this course-faculty mapping?':'Remove this section-course-faculty mapping?', ()=>{
+    if (areaMode) sem.areaMappings.splice(idx,1); else sem.sectionMappings.splice(idx,1);
+    saveSemesters(); renderMappings(semId); toast('Mapping removed.','warning');
   });
 }
 
-function renderMappings() {
-  const el = document.getElementById('mapping-list');
-  const areaMode = isAreaMode();
-  const currentMappings = areaMode ? State.areaMappings : State.sectionMappings;
-  if(!currentMappings.length){
+function renderMappings(semId) {
+  const sem      = getSem(semId);
+  const el       = document.getElementById(`${semId}-mapping-list`);
+  if (!el || !sem) return;
+  const areaMode = sem.configMode==='areas';
+  const maps     = areaMode ? sem.areaMappings : sem.sectionMappings;
+  if (!maps.length) {
     el.innerHTML = `<div class="empty-state"><div class="empty-icon">🔗</div><p>No mappings added yet.</p></div>`;
     return;
   }
-  const cMap = Object.fromEntries(State.courses.map(c=>[c.code,c]));
-  const fMap = Object.fromEntries(State.faculty.map(f=>[f.shortName,f]));
+  const cMap = Object.fromEntries(sem.courses.map(c=>[c.code,c]));
+  const fMap = Object.fromEntries(sem.faculty.map(f=>[f.shortName,f]));
   el.innerHTML = `<div class="table-wrap"><table class="data-table">
-    <thead><tr>${areaMode ? '' : '<th>Section</th>'}<th>Course</th><th>Faculty</th><th style="width:120px">Actions</th></tr></thead>
-    <tbody>${currentMappings.map((m,index)=>`<tr>
-      ${areaMode ? '' : `<td><span class="badge badge-gold">${m.section}</span></td>`}
+    <thead><tr>${areaMode?'':`<th>Section</th>`}<th>Course</th><th>Faculty</th><th style="width:120px">Actions</th></tr></thead>
+    <tbody>${maps.map((m,index)=>`<tr>
+      ${areaMode?'':`<td><span class="badge badge-gold">${m.section}</span></td>`}
       <td><span class="badge badge-blue" style="font-family:var(--font-m);margin-right:.35rem">${m.courseCode}</span>${cMap[m.courseCode]?cMap[m.courseCode].title:m.courseCode}</td>
       <td>${fMap[m.facultyShortName]?fMap[m.facultyShortName].fullName:m.facultyShortName}</td>
       <td>
-        <button class="btn btn-ghost btn-icon btn-sm" title="Edit" onclick="openMappingModal('edit',${index})">✎</button>
-        <button class="btn btn-ghost btn-icon btn-sm" title="Duplicate" onclick="openMappingModal('dup',${index})">⎘</button>
-        <button class="btn btn-danger btn-icon btn-sm" title="Delete" onclick="deleteMapping(${index})">✕</button>
+        <button class="btn btn-ghost btn-icon btn-sm" title="Edit"
+          onclick="openMappingModal('edit',${index},'${semId}')">✎</button>
+        <button class="btn btn-ghost btn-icon btn-sm" title="Duplicate"
+          onclick="openMappingModal('dup',${index},'${semId}')">⎘</button>
+        <button class="btn btn-danger btn-icon btn-sm" title="Delete"
+          onclick="deleteMapping(${index},'${semId}')">✕</button>
       </td>
     </tr>`).join('')}</tbody>
   </table></div>`;
 }
 
-document.getElementById('add-mapping-btn').addEventListener('click',()=>openMappingModal('add',null));
+// semId optional — when called with no arg (legacy timetable/verify code), falls back to the expanded or first semester.
+function isAreaMode(semId) {
+  if (semId === undefined) {
+    const sem = (expandedSemId && getSem(expandedSemId)) || State.semesters[0];
+    return sem ? sem.configMode === 'areas' : false;
+  }
+  const sem = getSem(semId);
+  return sem ? sem.configMode === 'areas' : false;
+}
 
-// RESET
-document.getElementById('reset-btn').addEventListener('click',()=>{
-  confirm2('Reset All Data','This will permanently delete all sections, courses, faculty, mappings, and the generated timetable. This cannot be undone.',()=>{
-    Object.values(KEY).forEach(k=>localStorage.removeItem(k));
-    location.reload();
-  });
-});
+function isSectionMode(semId) { return !isAreaMode(semId); }
 
 // TIMETABLE GENERATION
 const COURSE_PALETTE = ['#4f8ef7','#4caf7d','#c4953a','#9b6af5','#e07d3a','#e05252','#2aa3b8','#b84585'];
@@ -1383,99 +1611,109 @@ function getCourseColor(code) {
   return _courseColorMap[code];
 }
 
+// ─── CONFIG DATA & VALIDATION ────────────────────────────────
 function getConfigData() {
-  const areaMode = isAreaMode();
-  const courses = State.courses.map(course => {
-    const base = {
-      code: course.code,
-      title: course.title,
-      shortTitle: course.shortTitle,
-      credit: course.credit,
-      duration: course.duration,
-      requiredSlots: course.requiredSlots,
-    };
-    if (areaMode) {
-      base.areaShortName = course.areaShortName || '';
-      base.maxSessionsPerMonth = course.maxSessionsPerMonth || 0;
-    }
-    return base;
-  });
-
   return {
-    configMode: areaMode ? 'areas' : 'sections',
-    startDate:  State.startDate,
-    endDate:    State.endDate,
-    sections:   areaMode ? [] : State.sections,
-    areas:      areaMode ? State.areas : [],
-    courses,
-    faculty:    State.faculty,
-    mappings:   getVisibleMappings(),
-    courseConflicts: getVisibleConflictGroups(),
-    constraintConfig: State.constraintConfig || defaultConstraintConfig(),
+    semesters: State.semesters.map(sem => {
+      const areaMode = sem.configMode === 'areas';
+      const courses = sem.courses.map(c => {
+        const base = {
+          code: c.code, title: c.title, shortTitle: c.shortTitle,
+          credit: c.credit, duration: c.duration, requiredSlots: c.requiredSlots,
+        };
+        if (areaMode) {
+          base.areaShortName       = c.areaShortName || '';
+          base.maxSessionsPerMonth = c.maxSessionsPerMonth || 0;
+        }
+        return base;
+      });
+      return {
+        id: sem.id, name: sem.name,
+        configMode: sem.configMode,
+        startDate:  sem.startDate,
+        endDate:    sem.endDate,
+        sections:   areaMode ? []          : sem.sections,
+        areas:      areaMode ? sem.areas   : [],
+        courses,
+        faculty:    sem.faculty,
+        mappings:   areaMode ? sem.areaMappings : sem.sectionMappings,
+        courseConflicts: sem.courseConflicts.filter(g =>
+          areaMode
+            ? (!g.sections || !g.sections.length)
+            : !!(g.sections && g.sections.length)
+        ),
+        constraintConfig: sem.constraintConfig || defaultConstraintConfig(),
+      };
+    }),
   };
 }
 
 function validateConfig() {
+  if (!State.semesters.length)
+    return ['No semesters configured. Add at least one semester in the Configure tab.'];
   const errs = [];
-  if(!State.startDate||!State.endDate) errs.push('Teaching period (start/end date) not set.');
-  if(isAreaMode()) {
-    if(!State.areas.length) errs.push('No areas defined.');
-  } else if(!State.sections.length) {
-    errs.push('No sections defined.');
-  }
-  if(!State.courses.length)  errs.push('No courses defined.');
-  if(!State.faculty.length)  errs.push('No faculty defined.');
-  if(!getVisibleMappings().length) errs.push(isAreaMode() ? 'No course-faculty mappings defined.' : 'No section-course-faculty mappings defined.');
+  State.semesters.forEach(sem => {
+    const lbl = `"${sem.name}"`;
+    if (!sem.startDate || !sem.endDate)
+      errs.push(`${lbl}: Teaching period (start/end date) not set.`);
+    if (sem.configMode === 'areas') {
+      if (!sem.areas.length)    errs.push(`${lbl}: No areas defined.`);
+    } else {
+      if (!sem.sections.length) errs.push(`${lbl}: No sections defined.`);
+    }
+    if (!sem.courses.length) errs.push(`${lbl}: No courses defined.`);
+    if (!sem.faculty.length) errs.push(`${lbl}: No faculty defined.`);
+    const maps = sem.configMode === 'areas' ? sem.areaMappings : sem.sectionMappings;
+    if (!maps.length)
+      errs.push(`${lbl}: No ${sem.configMode === 'areas' ? 'course-faculty' : 'section-course-faculty'} mappings defined.`);
+  });
   return errs;
 }
 
 async function generateTimetable() {
   const errs = validateConfig();
-  if(errs.length){ toast(errs[0],'error'); return; }
+  if (errs.length) { toast(errs[0], 'error'); return; }
+
   const btn = document.getElementById('generate-btn');
   btn.disabled = true;
-  btn.innerHTML = `
-    <span class="spinner"></span>
-    <span>Solving… <span id="elapsed">0</span>s</span>
-  `;
-
-  const elapsedEl = btn.querySelector("#elapsed");
-
+  btn.innerHTML = `<span class="spinner"></span><span>Solving… <span id="elapsed">0</span>s</span>`;
+  const elapsedEl = btn.querySelector('#elapsed');
   let elapsed = 0;
-  const timer = setInterval(() => {
-      elapsed++;
-      elapsedEl.textContent = elapsed;
-  }, 1000);
-  
+  const timer = setInterval(() => { elapsed++; if (elapsedEl) elapsedEl.textContent = elapsed; }, 1000);
+
   try {
-    const res = await fetch('/api/solve',{
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify(getConfigData()),
+    const res = await fetch('/api/solve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(getConfigData()),   // sends { semesters: [...] }
     });
     const data = await res.json();
-    clearInterval(timer); btn.disabled=false; btn.innerHTML='⚡ Generate Timetable';
-    if(data.status==='error'){
-      toast('Error: '+data.message.replace(/\n/g, '<br/>'),'error'); return;
+    clearInterval(timer); btn.disabled = false; btn.innerHTML = '⚡ Generate Timetable';
+    if (data.status === 'error') {
+      toast('Error: ' + data.message.replace(/\n/g,'<br/>'), 'error'); return;
     }
-    if(data.status==='Infeasible'){
-      toast(data.message.replace(/\n/g, '<br/>'),'error');
-      return;
+    if (data.status === 'Infeasible') {
+      toast(data.message.replace(/\n/g,'<br/>'), 'error'); return;
     }
     State.timetable = data.timetable;
     State.timetableMeta = {
-      status: data.status,
-      timestamp: normalizeTimestamp(data.timestamp) || utcNowIso(),
+      status:         data.status,
+      timestamp:      normalizeTimestamp(data.timestamp) || utcNowIso(),
       constraintType: data.constraint_type,
-      penalty: data.penalty,
+      penalty:        data.penalty,
     };
-    set(KEY.timetable, State.timetable);
+    set(KEY.timetable,     State.timetable);
     set(KEY.timetableMeta, State.timetableMeta);
-    document.getElementById('verify-results').style.display='none';
+    document.getElementById('verify-results').style.display = 'none';
     refreshTimetableTab();
-      toast(`Timetable generated! Constraint: ${data.constraint_type}${data.penalty>0?' | Penalty: '+data.penalty:''}`, 'success');
+    toast(
+      `Timetable generated! Constraint: ${data.constraint_type}` +
+      (data.penalty > 0 ? ` | Penalty: ${data.penalty}` : ''),
+      'success'
+    );
   } catch(e) {
-    clearInterval(timer); btn.disabled=false; btn.innerHTML='⚡ Generate Timetable';
-    toast('Request failed. Is the server running?','error');
+    clearInterval(timer); btn.disabled = false; btn.innerHTML = '⚡ Generate Timetable';
+    toast('Request failed. Is the server running?', 'error');
     console.error(e);
   }
 }
@@ -1868,26 +2106,33 @@ function updateStaleWarning() {
 
 // TIMETABLE VERIFICATION
 async function verifyTimetable() {
-  if(!State.timetable||!State.timetable.length){ toast('No timetable to verify.','warning'); return; }
+  if (!State.timetable || !State.timetable.length) {
+    toast('No timetable to verify.', 'warning'); return;
+  }
   const btn = document.getElementById('verify-btn');
-  btn.disabled=true; btn.innerHTML='<span class="spinner"></span> Verifying…';
+  btn.disabled = true; btn.textContent = 'Verifying…';
   try {
-    const res = await fetch('/api/verify',{
-      method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({config:getConfigData(), timetable:State.timetable}),
+    // Sends all semesters config + the generated timetable
+    const payload = { ...getConfigData(), timetable: State.timetable };
+    const res = await fetch('/api/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
     });
     const data = await res.json();
-    btn.disabled=false; btn.innerHTML='✓ Verify Timetable';
-    if(data.error){ toast('Verify error: '+data.error,'error'); return; }
-    renderVerification(data);
-    toast('Verification complete.', data.allClear?'success':'warning');
+    btn.disabled = false; btn.innerHTML = '✓ Verify Timetable';
+    if (data.status === 'error') { toast(data.message, 'error'); return; }
+    renderVerifyResults(data);
+    document.getElementById('verify-results').style.display = 'block';
+    document.getElementById('verify-results').scrollIntoView({ behavior: 'smooth', block: 'start' });
   } catch(e) {
-    btn.disabled=false; btn.innerHTML='✓ Verify Timetable';
-    toast('Request failed.','error'); console.error(e);
+    btn.disabled = false; btn.innerHTML = '✓ Verify Timetable';
+    toast('Verification request failed.', 'error');
+    console.error(e);
   }
 }
 
-function renderVerification(data) {
+function renderVerifyResults(data) {
   const wrap = document.getElementById('verify-results');
   wrap.style.display = 'block';
   wrap.scrollIntoView({behavior:'smooth', block:'start'});
@@ -1910,19 +2155,11 @@ function renderVerification(data) {
     {val:slotViol===0?'✓':slotViol, label:'Slot Violations', cls:slotViol===0?'ok':'fail'},
     {val:clone===0?'✓':clone, label:'Cloning Violations', cls:clone===0?'ok':'fail'},
     {val:spacing===0?'✓':spacing, label:'Spacing Violations', cls:spacing===0?'ok':'fail'},
+    {val:unavail===0?'✓':unavail, label:'Unavailability', cls:unavail===0?'ok':'fail'},
+    {val:conflict===0?'✓':conflict, label:'Course conflicts', cls:conflict===0?'ok':'fail'},
+    {val:consec===0?'✓':consec, label:'Consecutive Violations', cls:consec===0?'ok':'fail'},
+    {val:spread===0?'✓':spread, label:'Spreading Violations', cls:spread===0?'ok':'fail'}
   ]
-  if (State.constraintConfig.facultyUnavailability){
-    stats.push({val:unavail===0?'✓':unavail, label:'Unavailability', cls:unavail===0?'ok':'fail'});
-  }
-  if (State.constraintConfig.courseConflicts){
-    stats.push({val:conflict===0?'✓':conflict, label:'Course conflicts', cls:conflict===0?'ok':'fail'});
-  }
-  if (State.constraintConfig.consecutiveRule.enabled){
-    stats.push({val:consec===0?'✓':consec, label:'Consecutive Violations', cls:consec===0?'ok':'fail'});
-  }
-  if (State.constraintConfig.spreadingRule.enabled){
-    stats.push({val:spread===0?'✓':spread, label:'Spreading Violations', cls:spread===0?'ok':'fail'});
-  }
   document.getElementById('verify-stats').innerHTML = stats.map(s=>`<div class="verify-stat ${s.cls}">
     <div class="vs-val">${s.val}</div>
     <div class="vs-label">${s.label}</div>
@@ -2212,11 +2449,9 @@ function renderVerification(data) {
   
   // 8. Consecutive violations
   if (consec>0) {
-    const maxC = (State.constraintConfig?.consecutiveRule?.maxConsecutive) || 2;
-    const consecRuleLabel = `max ${maxC} consecutive — violations are ${maxC+1}+ in a row`;
     html += `
     <div class="verify-section">
-      <div class="verify-section-title">❌ Consecutive Violations — ${consecRuleLabel} (${consec} found)</div>
+      <div class="verify-section-title">❌ Consecutive Violations — ${consec} found</div>
       <div class="table-wrap">
         <table class="data-table">
           <thead><tr><th>Section</th><th>Course</th><th>Window Start</th><th>Window End</th><th>Length</th></tr></thead>
@@ -2292,266 +2527,198 @@ function renderHeatmap(dist, container) {
   container.innerHTML = t;
 }
 
+// ─── CONSTRAINT HELPERS (per-card, semId-scoped) ──────────────
+
 function defaultConstraintConfig() {
   return {
     facultyUnavailability: true,
     courseConflicts: true,
-    consecutiveRule: {
-      enabled: true,
-      maxConsecutive: 2,
-      periodUnit: 'weeks',
-      resetBoundary: 'month',
-    },
-    spreadingRule: {
-      enabled: true,
-      weight: 0.1,
-    },
+    consecutiveRule: { enabled:true, maxConsecutive:2, periodUnit:'weeks', resetBoundary:'month' },
+    spreadingRule:   { enabled:true, weight:0.1 },
   };
 }
 
-function applyConstraintConfigToUI(cfg) {
-  document.getElementById('c-unavail').checked           = cfg.facultyUnavailability;
-  document.getElementById('c-conflicts').checked         = cfg.courseConflicts;
-  document.getElementById('c-consec-enabled').checked    = cfg.consecutiveRule.enabled;
-  document.getElementById('c-consec-max').value          = cfg.consecutiveRule.maxConsecutive;
-  document.getElementById('c-consec-unit').value         = cfg.consecutiveRule.periodUnit;
-  document.getElementById('c-consec-boundary').value     = cfg.consecutiveRule.resetBoundary;
-  toggleConsecDetail(cfg.consecutiveRule.enabled);
-  document.getElementById('c-spread-enabled').checked      = cfg.spreadingRule.enabled;
-  document.getElementById('c-spread-weight').value         = cfg.spreadingRule.weight;
-  toggleSpreadDetail(cfg.spreadingRule.enabled);
+function toggleConsecDetail(semId, enabled) {
+  const el = document.getElementById(`${semId}-c-consec-detail`);
+  if (el) el.style.display = enabled ? 'block' : 'none';
 }
 
-function toggleConsecDetail(enabled) {
-  document.getElementById('c-consec-detail').style.display = enabled ? 'block' : 'none';
+function toggleSpreadDetail(semId, enabled) {
+  const el = document.getElementById(`${semId}-c-spread-detail`);
+  if (el) el.style.display = enabled ? 'block' : 'none';
 }
 
-function toggleSpreadDetail(enabled) {
-  document.getElementById('c-spread-detail').style.display = enabled ? 'block' : 'none';
-}
-
-function saveConstraintConfig() {
+function saveConstraintConfig(semId) {
+  const sem = getSem(semId);
+  if (!sem) return;
+  const g = id => document.getElementById(`${semId}-${id}`);
   const cfg = {
-    facultyUnavailability: document.getElementById('c-unavail').checked,
-    courseConflicts:       document.getElementById('c-conflicts').checked,
+    facultyUnavailability: g('c-unavail').checked,
+    courseConflicts:       g('c-conflicts').checked,
     consecutiveRule: {
-      enabled:        document.getElementById('c-consec-enabled').checked,
-      maxConsecutive: parseInt(document.getElementById('c-consec-max').value) || 2,
-      periodUnit:     document.getElementById('c-consec-unit').value,
-      resetBoundary:  document.getElementById('c-consec-boundary').value,
+      enabled:        g('c-consec-enabled').checked,
+      maxConsecutive: parseInt(g('c-consec-max').value)||2,
+      periodUnit:     g('c-consec-unit').value,
+      resetBoundary:  g('c-consec-boundary').value,
     },
     spreadingRule: {
-      enabled: document.getElementById('c-spread-enabled').checked,
-      weight: parseFloat(document.getElementById('c-spread-weight').value) || 0.1,
+      enabled: g('c-spread-enabled').checked,
+      weight:  parseFloat(g('c-spread-weight').value)||0.1,
     },
   };
-  State.constraintConfig = cfg;
-  set(KEY.constraintConfig, cfg);
-  touchConfig();
+  sem.constraintConfig = cfg;
+  saveSemesters();
   toast('Constraint configuration saved.', 'success');
 }
 
-// INIT
+// ─── INIT ────────────────────────────────────────────────────
 function init() {
   loadState();
-  // Restore date inputs
-  if(State.startDate) document.getElementById('start-date').value = State.startDate;
-  if(State.endDate)   document.getElementById('end-date').value   = State.endDate;
-  document.getElementById('mode-sections').addEventListener('change', e => {
-    if (e.target.checked) setConfigMode('sections');
-  });
-  document.getElementById('mode-areas').addEventListener('change', e => {
-    if (e.target.checked) setConfigMode('areas');
-  });
-  renderSections();
-  renderAreas();
-  renderCourses();
-  renderFaculty();
-  renderMappings();
-  renderConflicts();
-  updateConfigModeUI();
+  renderSemCards();
   refreshTimetableTab();
-  applyConstraintConfigToUI(State.constraintConfig);
-  document.getElementById('c-consec-enabled').addEventListener('change', e => toggleConsecDetail(e.target.checked));
-  document.getElementById('c-spread-enabled').addEventListener('change', e => toggleSpreadDetail(e.target.checked));
-
-  // Modal buttons
-  const modalClose = document.getElementById('modal-close');
+  // Modal button wiring
+  const modalClose  = document.getElementById('modal-close');
   const modalCancel = document.getElementById('modal-cancel');
-  const modalSave = document.getElementById('modal-save');
-  if (modalClose) modalClose.addEventListener('click', () => closeModal());
+  const modalSave   = document.getElementById('modal-save');
+  if (modalClose)  modalClose.addEventListener('click',  () => closeModal());
   if (modalCancel) modalCancel.addEventListener('click', () => closeModal());
-  if (modalSave) modalSave.addEventListener('click', () => { if (typeof _modalSaveFn === 'function') _modalSaveFn(); });
+  if (modalSave)   modalSave.addEventListener('click',   () => { if (typeof _modalSaveFn==='function') _modalSaveFn(); });
 }
-
 init();
 
-// EXPORT — Builds a styled .xlsx with one sheet per data type
+// ─── EXPORT — one sheet per semester  +  separate Timetable sheet ───
 function exportToExcel() {
-  if (!State.sections.length && !State.areas.length && !State.courses.length && !State.faculty.length && !State.areaMappings.length && !State.sectionMappings.length) {
+  if (!State.semesters.length && (!State.timetable || !State.timetable.length)) {
     toast('Nothing to export yet.', 'warning'); return;
   }
- 
-  const wb = XLSX.utils.book_new();
- 
-  // style helpers 
-  // SheetJS CE doesn't support cell styles, but we can set col widths
-  // and use a well-structured layout. Full styling requires SheetJS Pro,
-  // so we use freeze panes + column widths which CE does support.
-  function setColWidths(ws, widths) {
-    ws['!cols'] = widths.map(w => ({ wch: w }));
-  }
-  function freezeHeader(ws) {
-    ws['!freeze'] = { xSplit: 0, ySplit: 1 };
-  }
- 
-  // META sheet
-  const metaRows = [
-    ['Class Timetable Scheduler — Configuration Export'],
-    ['Exported at', new Date().toLocaleString()],
-    ['Teaching Start', State.startDate || ''],
-    ['Teaching End',   State.endDate   || ''],
-    ['Configuration Mode', State.configMode || 'sections'],
-  ];
-  const wsMeta = XLSX.utils.aoa_to_sheet(metaRows);
-  setColWidths(wsMeta, [28, 30]);
-  XLSX.utils.book_append_sheet(wb, wsMeta, 'Meta');
- 
-  const areaMode = isAreaMode();
 
-  // SECTIONS / AREAS sheet (mode-specific)
-  if (!areaMode) {
-    const secHeader = ['Section Name', 'Weekday', 'From Time', 'To Time', 'Duration (hrs)'];
-    const secRows   = [];
-    State.sections.forEach(s =>
-      s.slots.forEach(sl =>
-        secRows.push([s.name, sl.weekday, sl.fromTime, sl.toTime, sl.duration])
+  const wb = XLSX.utils.book_new();
+
+  // helpers
+  function setColWidths(ws, widths) { ws['!cols'] = widths.map(w => ({ wch: w })); }
+  function freezeRow(ws)            { ws['!freeze'] = { xSplit: 0, ySplit: 1 }; }
+
+  // Excel sheet name: max 31 chars, no \ / * ? [ ] :
+  const reservedNames = new Set(['Timetable']);
+  function safeSheetName(raw) {
+    let s = (raw || 'Semester').replace(/[\\\/\*\?\[\]\:]/g, '_').slice(0, 28).trim();
+    let name = s, n = 1;
+    while (reservedNames.has(name)) name = s.slice(0, 24) + '_' + (n++);
+    reservedNames.add(name);
+    return name;
+  }
+
+  // ── One sheet per semester ────────────────────────────────────
+  State.semesters.forEach(sem => {
+    const cfg = sem.constraintConfig || defaultConstraintConfig();
+    const aoa = []; // array-of-arrays (rows)
+
+    // ── Identifier (first cell tells the importer this is a semester sheet) ──
+    aoa.push(['##SEMESTER_CONFIG##']);
+
+    // ── META ──
+    aoa.push(['##META##']);
+    aoa.push(['Semester Name',  sem.name]);
+    aoa.push(['Teaching Start', sem.startDate  || '']);
+    aoa.push(['Teaching End',   sem.endDate    || '']);
+    aoa.push(['Config Mode',    sem.configMode || 'sections']);
+    aoa.push([]);
+
+    // ── SECTIONS ──
+    aoa.push(['##SECTIONS##']);
+    aoa.push(['Section Name', 'Weekday', 'From Time', 'To Time', 'Duration (hrs)']);
+    sem.sections.forEach(s =>
+      (s.slots || []).forEach(sl =>
+        aoa.push([s.name, sl.weekday, sl.fromTime, sl.toTime, sl.duration])
       )
     );
-    const wsSec = XLSX.utils.aoa_to_sheet([secHeader, ...secRows]);
-    setColWidths(wsSec, [14, 12, 10, 10, 14]);
-    freezeHeader(wsSec);
-    XLSX.utils.book_append_sheet(wb, wsSec, 'Sections');
-  } else {
-    const areaHeader = ['Area Name', 'Short Name', 'Weekday', 'From Time', 'To Time', 'Duration (hrs)', 'Excluded Dates (YYYY-MM-DD)'];
-    const areaRows = [];
-    State.areas.forEach(area => {
-      const excludedDates = Array.isArray(area.excludedDates) ? area.excludedDates.join(', ') : '';
-      (area.slots || []).forEach(slot => {
-        areaRows.push([
-          area.name,
-          area.shortName,
-          slot.weekday,
-          slot.fromTime,
-          slot.toTime,
-          slot.duration,
-          excludedDates,
-        ]);
-      });
-    });
-    const wsAreas = XLSX.utils.aoa_to_sheet([areaHeader, ...areaRows]);
-    setColWidths(wsAreas, [22, 14, 12, 10, 10, 14, 28]);
-    freezeHeader(wsAreas);
-    XLSX.utils.book_append_sheet(wb, wsAreas, 'Areas');
-  }
- 
-  // COURSES sheet
-  const cHeader = areaMode
-    ? ['Course Code', 'Course Title', 'Short Title', 'Area Short Name', 'Max Sessions / Month', 'Credit', 'Duration', 'Required Slots']
-    : ['Course Code', 'Course Title', 'Short Title', 'Credit', 'Duration', 'Required Slots'];
-  const cRows   = State.courses.map(c => areaMode
-    ? [c.code, c.title, c.shortTitle, c.areaShortName || '', c.maxSessionsPerMonth || '', c.credit, c.duration, c.requiredSlots]
-    : [c.code, c.title, c.shortTitle, c.credit, c.duration, c.requiredSlots]
-  );
-  const wsCourse = XLSX.utils.aoa_to_sheet([cHeader, ...cRows]);
-  setColWidths(wsCourse, areaMode ? [14, 36, 12, 14, 16, 8, 10, 14] : [14, 36, 12, 8, 10, 14]);
-  freezeHeader(wsCourse);
-  XLSX.utils.book_append_sheet(wb, wsCourse, 'Courses');
- 
-  // FACULTY sheet
-  // Store unavailable slots as semicolon-separated entries: YYYY-MM-DD|HH:MM-HH:MM;...
-  const fHeader = ['Full Name', 'Short Name', 'Max Load Per Day', 'Unavailable Slots (YYYY-MM-DD|HH:MM-HH:MM;...)'];
-  const fRows   = [];
-  State.faculty.forEach(f => {
-    const slots = Array.isArray(f.unavailableSlots)
-      ? f.unavailableSlots.map(s => s.date + (s.fromTime ? '|' + s.fromTime + '-' + s.toTime : '')).join('; ')
-      : (Array.isArray(f.unavailableDates) ? f.unavailableDates.join('; ') : '');
-    fRows.push([f.fullName, f.shortName, f.maxLoadPerDay, slots]);
-  });
-  const wsFac = XLSX.utils.aoa_to_sheet([fHeader, ...fRows]);
-  setColWidths(wsFac, [30, 16, 16, 24]);
-  freezeHeader(wsFac);
-  XLSX.utils.book_append_sheet(wb, wsFac, 'Faculty');
- 
-  // MAPPING sheet (mode-specific)
-  const mHeader = areaMode
-    ? ['Course Code', 'Faculty Short Name']
-    : ['Section', 'Course Code', 'Faculty Short Name'];
-  const mRows = areaMode
-    ? State.areaMappings.map(m => [m.courseCode, m.facultyShortName])
-    : State.sectionMappings.map(m => [m.section, m.courseCode, m.facultyShortName]);
-  const wsMap = XLSX.utils.aoa_to_sheet([mHeader, ...mRows]);
-  setColWidths(wsMap, areaMode ? [16, 20] : [12, 16, 20]);
-  freezeHeader(wsMap);
-  XLSX.utils.book_append_sheet(wb, wsMap, 'Mapping');
- 
-  // CONFLICTS sheet
-  if (State.courseConflicts.length) {
-    const cfHeader = areaMode ? ['Group', 'Courses'] : ['Group', 'Courses', 'Sections'];
-    const cfRows   = [];
+    aoa.push([]);
 
-    State.courseConflicts.forEach((group, i) => {
-      cfRows.push(areaMode
-        ? [i + 1, group.courses.join(', ')]
-        : [i + 1, group.courses.join(', '), group.sections.join(', ')]
+    // ── AREAS ──
+    aoa.push(['##AREAS##']);
+    aoa.push(['Area Name', 'Short Name', 'Weekday', 'From Time', 'To Time', 'Duration (hrs)', 'Excluded Dates (comma-sep YYYY-MM-DD)']);
+    sem.areas.forEach(area => {
+      const excStr = (area.excludedDates || []).join(', ');
+      (area.slots || []).forEach(sl =>
+        aoa.push([area.name, area.shortName, sl.weekday, sl.fromTime, sl.toTime, sl.duration, excStr])
       );
     });
+    aoa.push([]);
 
-    const wsCf = XLSX.utils.aoa_to_sheet([cfHeader, ...cfRows]);
-    setColWidths(wsCf, areaMode ? [8, 30] : [8, 30, 20]);
-    freezeHeader(wsCf);
-    XLSX.utils.book_append_sheet(wb, wsCf, 'Conflicts');
-  }
+    // ── COURSES ──
+    aoa.push(['##COURSES##']);
+    aoa.push(['Course Code', 'Course Title', 'Short Title', 'Area Short Name',
+              'Max Sessions/Month', 'Credit', 'Duration', 'Required Slots']);
+    sem.courses.forEach(c =>
+      aoa.push([
+        c.code, c.title, c.shortTitle || '',
+        c.areaShortName || '', c.maxSessionsPerMonth || '',
+        c.credit, c.duration, c.requiredSlots,
+      ])
+    );
+    aoa.push([]);
 
-  // CONSTRAINTS sheet
-  const ccfg = State.constraintConfig || defaultConstraintConfig();
-  const csCfgRows = [
-    ['facultyUnavailability',          ccfg.facultyUnavailability],
-    ['courseConflicts',                ccfg.courseConflicts],
-    ['consecutiveRule.enabled',        ccfg.consecutiveRule.enabled],
-    ['consecutiveRule.maxConsecutive', ccfg.consecutiveRule.maxConsecutive],
-    ['consecutiveRule.periodUnit',     ccfg.consecutiveRule.periodUnit],
-    ['consecutiveRule.resetBoundary',  ccfg.consecutiveRule.resetBoundary],
-    ['spreadingRule.enabled',          ccfg.spreadingRule.enabled],
-    ['spreadingRule.weight',           ccfg.spreadingRule.weight],
-  ];
-  const wsConstraints = XLSX.utils.aoa_to_sheet([['Setting', 'Value'], ...csCfgRows]);
-  setColWidths(wsConstraints, [34, 16]);
-  freezeHeader(wsConstraints);
-  XLSX.utils.book_append_sheet(wb, wsConstraints, 'Constraints');
- 
-  // TIMETABLE sheet (only if generated) 
+    // ── FACULTY ──
+    aoa.push(['##FACULTY##']);
+    aoa.push(['Full Name', 'Short Name', 'Max Load Per Day', 'Unavailable Slots (date|HH:MM-HH:MM;...)']);
+    sem.faculty.forEach(f => {
+      const slotsStr = Array.isArray(f.unavailableSlots)
+        ? f.unavailableSlots.map(s => s.date + (s.fromTime ? '|' + s.fromTime + '-' + s.toTime : '')).join('; ')
+        : (Array.isArray(f.unavailableDates) ? f.unavailableDates.join('; ') : '');
+      aoa.push([f.fullName, f.shortName, f.maxLoadPerDay, slotsStr]);
+    });
+    aoa.push([]);
+
+    // ── MAPPING ──
+    // Unified columns: Section | Course Code | Faculty Short Name
+    // Area-mode mappings leave Section blank.
+    aoa.push(['##MAPPING##']);
+    aoa.push(['Section', 'Course Code', 'Faculty Short Name']);
+    sem.sectionMappings.forEach(m => aoa.push([m.section || '', m.courseCode, m.facultyShortName]));
+    sem.areaMappings.forEach(m    => aoa.push(['',              m.courseCode, m.facultyShortName]));
+    aoa.push([]);
+
+    // ── CONFLICTS ──
+    aoa.push(['##CONFLICTS##']);
+    aoa.push(['Group', 'Courses', 'Sections']);
+    sem.courseConflicts.forEach((g, i) =>
+      aoa.push([i + 1, g.courses.join(', '), (g.sections || []).join(', ')])
+    );
+    aoa.push([]);
+
+    // ── CONSTRAINTS ──
+    aoa.push(['##CONSTRAINTS##']);
+    aoa.push(['Setting', 'Value']);
+    aoa.push(['facultyUnavailability',          cfg.facultyUnavailability]);
+    aoa.push(['courseConflicts',                cfg.courseConflicts]);
+    aoa.push(['consecutiveRule.enabled',        cfg.consecutiveRule.enabled]);
+    aoa.push(['consecutiveRule.maxConsecutive', cfg.consecutiveRule.maxConsecutive]);
+    aoa.push(['consecutiveRule.periodUnit',     cfg.consecutiveRule.periodUnit]);
+    aoa.push(['consecutiveRule.resetBoundary',  cfg.consecutiveRule.resetBoundary]);
+    aoa.push(['spreadingRule.enabled',          cfg.spreadingRule.enabled]);
+    aoa.push(['spreadingRule.weight',           cfg.spreadingRule.weight]);
+
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    setColWidths(ws, [24, 22, 14, 14, 14, 12, 40]);
+    XLSX.utils.book_append_sheet(wb, ws, safeSheetName(sem.name));
+  });
+
+  // ── TIMETABLE sheet (same pivoted structure as before) ───────
   if (State.timetable && State.timetable.length) {
-    const tt = State.timetable;
-
-    // Collect unique sections in sorted order
+    const tt         = State.timetable;
     const ttSections = [...new Set(tt.map(r => r.section))].sort();
 
-    // Pivot: group by date + day + fromTime + toTime
     const pivotMap = new Map();
     tt.forEach(r => {
       const key = `${r.date}||${r.day}||${r.fromTime}||${r.toTime}`;
-      if (!pivotMap.has(key)) pivotMap.set(key, { date: r.date, day: r.day, fromTime: r.fromTime, toTime: r.toTime, cells: {} });
-      const cellStr = `${r.courseShort || r.courseCode} (${r.facultyShort || ''})`;
+      if (!pivotMap.has(key))
+        pivotMap.set(key, { date: r.date, day: r.day, fromTime: r.fromTime, toTime: r.toTime, cells: {} });
       const entry = pivotMap.get(key);
       if (!entry.cells[r.section]) entry.cells[r.section] = [];
-      entry.cells[r.section].push(cellStr);
+      entry.cells[r.section].push(`${r.courseShort || r.courseCode} (${r.facultyShort || ''})`);
     });
-
-    // Sort pivot rows by date then fromTime
-    const pivotRows = [...pivotMap.values()].sort((a, b) =>
-      a.date.localeCompare(b.date) || a.fromTime.localeCompare(b.fromTime)
-    );
+    const pivotRows = [...pivotMap.values()]
+      .sort((a, b) => a.date.localeCompare(b.date) || a.fromTime.localeCompare(b.fromTime));
 
     const ttHeader = ['Date', 'Day', 'From Time', 'To Time', ...ttSections];
     const ttRows   = pivotRows.map(p =>
@@ -2560,24 +2727,21 @@ function exportToExcel() {
 
     const wsTT = XLSX.utils.aoa_to_sheet([ttHeader, ...ttRows]);
     setColWidths(wsTT, [12, 10, 10, 10, ...ttSections.map(() => 10)]);
-    freezeHeader(wsTT);
+    freezeRow(wsTT);
 
     const meta = State.timetableMeta;
     if (meta) {
-      // Append generation info two rows below the table
-      const lastRow = ttRows.length + 3;
       XLSX.utils.sheet_add_aoa(wsTT, [
         [],
-        ['__META__', 'Status', meta.status],
+        ['__META__', 'Status',       meta.status],
         ['__META__', 'Generated At', meta.timestamp],
-        ['__META__', 'Constraint', meta.constraintType],
-        ['__META__', 'Penalty', meta.penalty],
-      ], { origin: { r: lastRow, c: 0 } });
+        ['__META__', 'Constraint',   meta.constraintType],
+        ['__META__', 'Penalty',      meta.penalty],
+      ], { origin: { r: ttRows.length + 3, c: 0 } });
     }
     XLSX.utils.book_append_sheet(wb, wsTT, 'Timetable');
   }
- 
-  // Download
+
   const date  = new Date().toISOString().slice(0, 10);
   const fname = `Program_Timetable_Config_${date}.xlsx`;
   XLSX.writeFile(wb, fname);
@@ -2708,355 +2872,72 @@ function importFromExcel(file) {
   reader.onload = e => {
     try {
       const wb = XLSX.read(e.target.result, { type: 'array' });
- 
-      // helper: sheet → array of row-objects 
-      function sheetRows(sheetName) {
-        if (!wb.SheetNames.includes(sheetName)) return [];
-        return XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: '' });
-      }
- 
-      // META
-      let modeVal = '';
-      const metaSheet = wb.Sheets['Meta'];
-      if (metaSheet) {
-        const metaArr = XLSX.utils.sheet_to_json(metaSheet, { header: 1, defval: '' });
-        // Row index 2 → Teaching Start, 3 → Teaching End
-        const startVal = metaArr[2] && metaArr[2][1] ? String(metaArr[2][1]).trim() : '';
-        const endVal   = metaArr[3] && metaArr[3][1] ? String(metaArr[3][1]).trim() : '';
-        modeVal = metaArr[4] && metaArr[4][1] ? String(metaArr[4][1]).trim() : '';
-        if (startVal) { State.startDate = startVal; set(KEY.startDate, startVal); }
-        if (endVal)   { State.endDate   = endVal;   set(KEY.endDate,   endVal);   }
-        if (modeVal === 'areas' || modeVal === 'sections') {
-          State.configMode = modeVal;
-          set(KEY.configMode, modeVal);
-        }
-      }
- 
-      const fileMode = modeVal === 'areas' || modeVal === 'sections'
-        ? modeVal
-        : (wb.SheetNames.includes('Areas') && !wb.SheetNames.includes('Sections') ? 'areas' : 'sections');
 
-      // SECTIONS / AREAS (mode-specific)
-      if (fileMode === 'sections') {
-        const secRows = sheetRows('Sections');
-        if (secRows.length) {
-          const secMap = {};
-          secRows.forEach(r => {
-            const name = String(r['Section Name'] || '').trim();
-            if (!name) return;
-            if (!secMap[name]) secMap[name] = { name, slots: [] };
-            secMap[name].slots.push({
-              weekday:  String(r['Weekday']        || 'Saturday').trim(),
-              fromTime: String(r['From Time']      || '09:00').trim(),
-              toTime:   String(r['To Time']        || '11:45').trim(),
-              duration: parseFloat(r['Duration (hrs)']) || 2.5,
-            });
-          });
-          State.sections = Object.values(secMap);
-          set(KEY.sections, State.sections);
-        }
-        State.areas = [];
-        remove(KEY.areas);
-      } else {
-        const areaRows = sheetRows('Areas');
-        if (areaRows.length) {
-          const areaMap = {};
-          areaRows.forEach(r => {
-            const shortName = String(r['Short Name'] || '').trim();
-            if (!shortName) return;
-            if (!areaMap[shortName]) {
-              areaMap[shortName] = {
-                name: String(r['Area Name'] || '').trim(),
-                shortName,
-                slots: [],
-                excludedDates: [],
-              };
-            }
-            areaMap[shortName].slots.push({
-              weekday:  String(r['Weekday']        || 'Saturday').trim(),
-              fromTime: String(r['From Time']      || '09:00').trim(),
-              toTime:   String(r['To Time']        || '11:45').trim(),
-              duration: parseFloat(r['Duration (hrs)']) || 2.5,
-            });
-            const datesStr = String(r['Excluded Dates (YYYY-MM-DD)'] || '').trim();
-            if (datesStr) {
-              datesStr.split(',')
-                .map(d => d.trim())
-                .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d))
-                .forEach(date => {
-                  if (!areaMap[shortName].excludedDates.includes(date)) {
-                    areaMap[shortName].excludedDates.push(date);
-                  }
-                });
-            }
-          });
-          State.areas = Object.values(areaMap);
-          set(KEY.areas, State.areas);
-        }
-        State.sections = [];
-        remove(KEY.sections);
+      // Read a sheet as array-of-arrays
+      function toAoA(name) {
+        const ws = wb.Sheets[name];
+        return ws ? XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' }) : [];
       }
- 
-      // COURSES
-      const cRows = sheetRows('Courses');
-      if (cRows.length) {
-        State.courses = cRows
-          .filter(r => r['Course Code'])
-          .map(r => {
-            const base = {
-              code: String(r['Course Code'] || '').trim(),
-              title: String(r['Course Title'] || '').trim(),
-              shortTitle: String(r['Short Title'] || '').trim(),
-              credit: parseFloat(r['Credit']) || 0,
-              duration: parseFloat(r['Duration']) || 0,
-              requiredSlots: parseInt(r['Required Slots']) || 0,
-            };
-            if (fileMode === 'areas') {
-              base.areaShortName = String(r['Area Short Name'] || '').trim();
-              base.maxSessionsPerMonth = parseInt(r['Max Sessions / Month']) || 0;
-            }
-            return base;
-          });
-        set(KEY.courses, State.courses);
-      }
- 
-      // FACULTY
-      const fRows = sheetRows('Faculty');
-      if (fRows.length) {
-        const facMap = {};
-        fRows.forEach(r => {
-          const short = String(r['Short Name'] || '').trim();
-          if (!short) return;
-
-          const slotsStr = String(r['Unavailable Slots (YYYY-MM-DD|HH:MM-HH:MM;...)'] || r['Unavailable Slots'] || r['Unavailable Dates (YYYY-MM-DD)'] || '').trim();
-          const slots = [];
-          if (slotsStr) {
-            slotsStr.split(/;|,/).map(s=>s.trim()).filter(Boolean).forEach(token => {
-              // token formats: YYYY-MM-DD or YYYY-MM-DD|HH:MM-HH:MM
-              const parts = token.split('|').map(p=>p.trim());
-              const date = parts[0];
-              if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return;
-              if (parts[1]) {
-                const times = parts[1].split('-').map(t=>t.trim());
-                const ft = times[0]||'';
-                const tt = times[1]||'';
-                slots.push({date, fromTime: ft, toTime: tt});
-              } else {
-                slots.push({date, fromTime:'', toTime:''});
-              }
-            });
-          }
-
-          facMap[short] = {
-            fullName: String(r['Full Name'] || '').trim(),
-            shortName: short,
-            maxLoadPerDay: parseInt(r['Max Load Per Day']) || 2,
-            unavailableSlots: slots
-          };
-        });
-        State.faculty = Object.values(facMap);
-        set(KEY.faculty, State.faculty);
-      }
- 
-      // MAPPING
-      const mRows = sheetRows('Mapping');
-      if (mRows.length) {
-        State.sectionMappings = [];
-        State.areaMappings = [];
-        
-        mRows.forEach(r => {
-          if (!r['Course Code'] || !r['Faculty Short Name']) return;
-
-          const mapping = {
-            courseCode: String(r['Course Code'] || '').trim(),
-            facultyShortName: String(r['Faculty Short Name'] || '').trim(),
-          };
-
-          if (fileMode === 'areas') {
-            State.areaMappings.push(mapping);
-          } else {
-            mapping.section = String(r['Section'] || '').trim();
-            if (mapping.section) State.sectionMappings.push(mapping);
-          }
-        });
-        
-        set(KEY.sectionMappings, State.sectionMappings);
-        set(KEY.areaMappings, State.areaMappings);
+      // Read a sheet as array-of-objects keyed by header row (legacy helper)
+      function toObjects(name) {
+        const aoa = toAoA(name);
+        if (aoa.length < 2) return [];
+        const hdr = aoa[0].map(h => String(h || '').trim());
+        return aoa.slice(1)
+          .map(r => Object.fromEntries(hdr.map((h, i) => [h, r[i] !== undefined ? r[i] : ''])))
+          .filter(r => Object.values(r).some(v => v !== '' && v !== null && v !== undefined));
       }
 
-      // CONFLICTS
-      const cfRows = sheetRows('Conflicts');
-      if (cfRows.length) {
-        const parsedGroups = [];
+      // ── Detect format ────────────────────────────────────────
+      const semSheets = wb.SheetNames.filter(name => {
+        if (name === 'Timetable') return false;
+        const rows = toAoA(name);
+        return rows.length > 0 && String(rows[0][0] || '').trim() === '##SEMESTER_CONFIG##';
+      });
+      const isNewFormat = semSheets.length > 0;
+      const isLegacy = !isNewFormat &&
+        wb.SheetNames.some(n => ['Sections','Areas','Courses','Faculty','Mapping','Meta'].includes(n));
 
-        cfRows.forEach(r => {
-          const coursesStr  = String(r['Courses']  || '').trim();
-          const sectionsStr = fileMode === 'sections' ? String(r['Sections'] || '').trim() : '';
-
-          if (!coursesStr) return;
-
-          const courses = coursesStr
-            .split(',')
-            .map(c => c.trim())
-            .filter(Boolean);
-
-          const sections = sectionsStr
-            .split(',')
-            .map(s => s.trim())
-            .filter(Boolean);
-
-          if (courses.length >= 2) {
-            parsedGroups.push({ courses, sections });
-          }
-        });
-
-        State.courseConflicts = parsedGroups;
-        set(KEY.conflicts, State.courseConflicts);
+      if (!isNewFormat && !isLegacy) {
+        toast('No recognizable semester data found in this file.', 'error'); return;
       }
 
-      // CONSTRAINTS
-      const _toBool = v => {
-        if (typeof v === 'boolean') return v;
-        if (typeof v === 'number')  return v !== 0;
-        if (typeof v === 'string')  return v.toLowerCase() === 'true';
-        return false;
-      };
-      const csRows = sheetRows('Constraints');
-      if (csRows.length) {
-        const kv = Object.fromEntries(
-          csRows
-            .filter(r => r['Setting'])
-            .map(r => [String(r['Setting']).trim(), r['Value']])
-        );
-        const importedConstraints = {
-          facultyUnavailability: _toBool(kv['facultyUnavailability'] ?? true),
-          courseConflicts:       _toBool(kv['courseConflicts']       ?? true),
-          consecutiveRule: {
-            enabled:        _toBool(kv['consecutiveRule.enabled']          ?? true),
-            maxConsecutive: parseInt(kv['consecutiveRule.maxConsecutive'])  || 2,
-            periodUnit:     String(kv['consecutiveRule.periodUnit']  || 'weeks').trim(),
-            resetBoundary:  String(kv['consecutiveRule.resetBoundary']|| 'month').trim(),
-          },
-          spreadingRule: {
-            enabled: _toBool(kv['spreadingRule.enabled'] ?? true),
-            weight:  parseFloat(kv['spreadingRule.weight']) || 0.1,
-          },
-        };
-        State.constraintConfig = importedConstraints;
-        set(KEY.constraintConfig, importedConstraints);
+      // ── Parse semesters ──────────────────────────────────────
+      const importedSemesters = isNewFormat
+        ? semSheets.map(name => _parseSemesterSheet(toAoA(name), name))
+        : [_parseLegacySheets(toObjects, wb.SheetNames)];
+
+      const validSemesters = importedSemesters.filter(Boolean);
+      if (!validSemesters.length) {
+        toast('No valid semester data could be parsed.', 'error'); return;
       }
- 
-      // TIMETABLE (optional, read-only — just restore display)
-      const ttRows = sheetRows('Timetable');
-      if (ttRows.length) {
-        const timetable = [];
-        const meta = {};
 
-        // Build lookup maps from already-parsed config (shortTitle → course, shortName → faculty)
-        const courseByShort = Object.fromEntries(
-          (State.courses || []).map(c => [c.shortTitle, c])
-        );
-        const courseByCode  = Object.fromEntries(
-          (State.courses || []).map(c => [c.code, c])
-        );
-        const facultyByShort = Object.fromEntries(
-          (State.faculty || []).map(f => [f.shortName, f])
-        );
+      // ── Parse timetable (same for both formats) ──────────────
+      const { timetable, meta } = _parseTimetableSheet(toAoA('Timetable'), validSemesters);
 
-        // Fixed columns; anything beyond is a section column
-        const fixedCols = new Set(['Date', 'Day', 'From Time', 'To Time']);
+      // ── Apply to state ───────────────────────────────────────
+      State.semesters = validSemesters;
+      saveSemesters();
+      expandedSemId = null;
 
-        ttRows.forEach(r => {
-          // Detect metadata sentinel rows
-          if (String(r['Date'] || '').trim() === '__META__') {
-            const key = String(r['Day'] || '').trim();
-            const val = String(r['From Time'] || '').trim();
-            if (key === 'Status') meta.status = val;
-            if (key === 'Generated At') meta.timestamp = normalizeTimestamp(val) || val;
-            if (key === 'Constraint')   meta.constraintType = val;
-            if (key === 'Penalty')      meta.penalty = val;
-            return;
-          }
-
-          if (!r['Date']) return;
-
-          const date      = String(r['Date']      || '').trim();
-          const day       = String(r['Day']       || '').trim();
-          const fromTime  = String(r['From Time'] || '').trim();
-          const toTime    = String(r['To Time']   || '').trim();
-          const timeLabel = `${fromTime} - ${toTime}`;
-
-          // Each non-fixed column is a section
-          Object.keys(r).forEach(col => {
-            if (fixedCols.has(col)) return;
-            const cellVal = String(r[col] || '').trim();
-            if (!cellVal) return;
-
-            const section = col.trim();
-
-            // Support multiple entries per cell separated by ' / '
-            const parts = cellVal.split(/\s*\/\s*/).map(s => s.trim()).filter(Boolean);
-            parts.forEach(part => {
-              // Parse "SHORTNAME (FACULTYSHORT)" — faculty short may contain spaces
-              const match = part.match(/^(.+?)\s*\((.+)\)$/);
-              const rawShort  = match ? match[1].trim() : part;
-              const facShort  = match ? match[2].trim() : '';
-
-              // Resolve course
-              const course     = courseByShort[rawShort] || courseByCode[rawShort] || null;
-              const courseCode  = course ? course.code       : rawShort;
-              const courseTitle = course ? course.title      : rawShort;
-              const courseShort = course ? course.shortTitle : rawShort;
-
-              // Resolve faculty
-              const facObj  = facultyByShort[facShort] || null;
-              const faculty = facObj ? facObj.fullName : facShort;
-
-              timetable.push({ date, day, fromTime, toTime, timeLabel, section, courseCode, courseTitle, courseShort, facultyShort: facShort, faculty });
-            });
-          });
-        });
-
-        State.timetable = timetable;
-        set(KEY.timetable, State.timetable);
-
-        State.timetableMeta = Object.keys(meta).length ? meta : {
-          status: 'imported',
-          timestamp: utcNowIso(),
-          constraintType: 'imported',
-          penalty: '?'
-        };
+      if (timetable.length) {
+        State.timetable     = timetable;
+        State.timetableMeta = meta;
+        set(KEY.timetable,     State.timetable);
         set(KEY.timetableMeta, State.timetableMeta);
       }
- 
-      // Re-render everything
-      touchConfig();
-      if (State.startDate) document.getElementById('start-date').value = State.startDate;
-      if (State.endDate)   document.getElementById('end-date').value   = State.endDate;
-      updateConfigModeUI();
-      renderSections();
-      renderAreas();
-      renderCourses();
-      renderFaculty();
-      renderMappings();
-      renderConflicts();
+
+      renderSemCards();
       refreshTimetableTab();
-      applyConstraintConfigToUI(State.constraintConfig);
-      const hasImportedConstraints = csRows.length > 0;
-      const totalMappings = State.sectionMappings.length + State.areaMappings.length;
-      const counts = [
-        State.sections.length? State.sections.length  + ' sections' : null,
-        State.areas.length ? State.areas.length + ' areas' : null,
-        State.courses.length ? State.courses.length   + ' courses': null,
-        State.courseConflicts.length ? State.courseConflicts.length + ' conflict groups': null,
-        State.faculty.length ? State.faculty.length   + ' faculty': null,
-        totalMappings ? totalMappings  + ' mappings': null,
-        hasImportedConstraints ? 'constraint config' : null,
-        State.timetable && State.timetable.length ? State.timetable.length + ' timetable sessions' : null,
-      ].filter(Boolean).join(', ');
-      toast(`Imported: ${counts}`, 'success');
- 
-    } catch (err) {
+      touchConfig();
+
+      const parts = [
+        validSemesters.length + ' semester(s): ' + validSemesters.map(s => `"${s.name}"`).join(', '),
+        timetable.length ? timetable.length + ' timetable sessions' : null,
+      ].filter(Boolean);
+      toast('Imported: ' + parts.join(' | '), 'success');
+
+    } catch(err) {
       toast('Import failed: ' + err.message, 'error');
       console.error(err);
     }
@@ -3064,27 +2945,384 @@ function importFromExcel(file) {
   reader.readAsArrayBuffer(file);
 }
 
+/* ── Parse one new-format semester sheet (array-of-arrays) ── */
+function _parseSemesterSheet(rows, sheetName) {
+  const _toBool = v => {
+    if (typeof v === 'boolean') return v;
+    if (typeof v === 'number')  return v !== 0;
+    if (typeof v === 'string')  return v.toLowerCase() === 'true';
+    return false;
+  };
+
+  // Scan rows into named sections { META: [[row],...], SECTIONS: [...], ... }
+  const sections = {};
+  let cur = null;
+  rows.forEach(row => {
+    const first = String(row[0] || '').trim();
+    if (first === '##SEMESTER_CONFIG##') { cur = null; return; }
+    if (/^##[A-Z_]+##$/.test(first)) {
+      cur = first.slice(2, -2); // "META", "SECTIONS", …
+      if (!sections[cur]) sections[cur] = [];
+      return;
+    }
+    if (cur && !row.every(c => String(c || '').trim() === ''))
+      sections[cur].push(row.map(c => String(c || '').trim()));
+  });
+
+  const getRows  = key => sections[key] || [];
+  const dataRows = key => getRows(key).slice(1);   // first row after marker is header → skip
+
+  // META
+  const metaKV = Object.fromEntries(getRows('META').map(r => [r[0], r[1]]));
+  const sem = {
+    id:         generateSemId(),
+    name:       metaKV['Semester Name'] || sheetName,
+    startDate:  metaKV['Teaching Start'] || '',
+    endDate:    metaKV['Teaching End']   || '',
+    configMode: metaKV['Config Mode']    || 'sections',
+    sections: [], areas: [], courses: [], faculty: [],
+    sectionMappings: [], areaMappings: [], courseConflicts: [],
+    constraintConfig: defaultConstraintConfig(),
+  };
+
+  // SECTIONS: Section Name | Weekday | From Time | To Time | Duration
+  const secMap = new Map();
+  dataRows('SECTIONS').filter(r => r[0]).forEach(r => {
+    const [name, weekday, fromTime, toTime, duration] = r;
+    if (!name) return;
+    if (!secMap.has(name)) secMap.set(name, { name, slots: [] });
+    if (weekday) secMap.get(name).slots.push({ weekday, fromTime, toTime, duration: parseFloat(duration) || 2.5 });
+  });
+  sem.sections = [...secMap.values()];
+
+  // AREAS: Area Name | Short Name | Weekday | From Time | To Time | Duration | Excluded Dates
+  const areaMap = new Map();
+  dataRows('AREAS').filter(r => r[1]).forEach(r => {
+    const [name, shortName, weekday, fromTime, toTime, duration, excStr] = r;
+    if (!shortName) return;
+    if (!areaMap.has(shortName)) {
+      const excludedDates = excStr ? excStr.split(',').map(d => d.trim()).filter(Boolean) : [];
+      areaMap.set(shortName, { name: name || shortName, shortName, slots: [], excludedDates });
+    }
+    if (weekday) areaMap.get(shortName).slots.push({ weekday, fromTime, toTime, duration: parseFloat(duration) || 2.5 });
+  });
+  sem.areas = [...areaMap.values()];
+
+  // COURSES: Code|Title|Short|AreaShort|MaxMonthly|Credit|Duration|ReqSlots
+  sem.courses = dataRows('COURSES').filter(r => r[0] && r[1]).map(r => ({
+    code: r[0], title: r[1], shortTitle: r[2] || '',
+    areaShortName:       r[3] || '',
+    maxSessionsPerMonth: parseInt(r[4])   || 0,
+    credit:              parseFloat(r[5]) || 0,
+    duration:            parseFloat(r[6]) || 0,
+    requiredSlots:       parseInt(r[7])   || 0,
+  }));
+
+  // FACULTY: Full Name | Short Name | Max Load | Slots String
+  sem.faculty = dataRows('FACULTY').filter(r => r[0] && r[1]).map(r => {
+    const [fullName, shortName, maxLoad, slotsStr] = r;
+    const unavailableSlots = [];
+    if (slotsStr) {
+      slotsStr.split(';').forEach(entry => {
+        const t = entry.trim(); if (!t) return;
+        const pi = t.indexOf('|');
+        if (pi === -1) {
+          unavailableSlots.push({ date: t, fromTime: '', toTime: '' });
+        } else {
+          const date = t.slice(0, pi);
+          const [fromTime = '', toTime = ''] = t.slice(pi + 1).split('-');
+          unavailableSlots.push({ date, fromTime, toTime });
+        }
+      });
+    }
+    return { fullName, shortName, maxLoadPerDay: parseInt(maxLoad) || 2, unavailableSlots };
+  });
+
+  // MAPPING: Section(blank=area) | Course Code | Faculty Short Name
+  dataRows('MAPPING').filter(r => r[1] && r[2]).forEach(r => {
+    const [section, courseCode, facultyShortName] = r;
+    if (section) sem.sectionMappings.push({ section, courseCode, facultyShortName });
+    else         sem.areaMappings.push({ courseCode, facultyShortName });
+  });
+
+  // CONFLICTS: Group | Courses | Sections
+  dataRows('CONFLICTS').filter(r => r[1]).forEach(r => {
+    const courses  = r[1].split(',').map(c => c.trim()).filter(Boolean);
+    const sections = r[2] ? r[2].split(',').map(s => s.trim()).filter(Boolean) : [];
+    if (courses.length >= 2) sem.courseConflicts.push({ courses, sections });
+  });
+
+  // CONSTRAINTS: Setting | Value
+  const csRows = dataRows('CONSTRAINTS').filter(r => r[0]);
+  if (csRows.length) {
+    const kv = Object.fromEntries(csRows.map(r => [r[0], r[1]]));
+    sem.constraintConfig = {
+      facultyUnavailability: _toBool(kv['facultyUnavailability'] ?? true),
+      courseConflicts:       _toBool(kv['courseConflicts']       ?? true),
+      consecutiveRule: {
+        enabled:        _toBool(kv['consecutiveRule.enabled']         ?? true),
+        maxConsecutive: parseInt(kv['consecutiveRule.maxConsecutive'])  || 2,
+        periodUnit:     String(kv['consecutiveRule.periodUnit']   || 'weeks').trim(),
+        resetBoundary:  String(kv['consecutiveRule.resetBoundary'] || 'month').trim(),
+      },
+      spreadingRule: {
+        enabled: _toBool(kv['spreadingRule.enabled'] ?? true),
+        weight:  parseFloat(kv['spreadingRule.weight']) || 0.1,
+      },
+    };
+  }
+
+  return sem;
+}
+
+/* ── Parse old-format sheets into a single semester ── */
+function _parseLegacySheets(toObjects, sheetNames) {
+  const _toBool = v => {
+    if (typeof v === 'boolean') return v;
+    if (typeof v === 'number')  return v !== 0;
+    if (typeof v === 'string')  return v.toLowerCase() === 'true';
+    return false;
+  };
+
+  const sem = {
+    id: generateSemId(), name: 'Imported Semester',
+    startDate: '', endDate: '', configMode: 'sections',
+    sections: [], areas: [], courses: [], faculty: [],
+    sectionMappings: [], areaMappings: [], courseConflicts: [],
+    constraintConfig: defaultConstraintConfig(),
+  };
+
+  // Meta sheet
+  toObjects('Meta').forEach(r => {
+    const vals = Object.values(r);
+    const k = String(vals[0] || '').trim();
+    const v = String(vals[1] || '').trim();
+    if (k === 'Teaching Start') sem.startDate  = v;
+    if (k === 'Teaching End')   sem.endDate    = v;
+    if (k === 'Configuration Mode' || k === 'Config Mode') sem.configMode = v;
+  });
+
+  // Infer mode from which sheets exist
+  if (sheetNames.includes('Areas') && !sheetNames.includes('Sections')) sem.configMode = 'areas';
+
+  // Sections
+  const secMap = new Map();
+  toObjects('Sections').forEach(r => {
+    const name = String(r['Section Name'] || '').trim(); if (!name) return;
+    if (!secMap.has(name)) secMap.set(name, { name, slots: [] });
+    const weekday  = String(r['Weekday']       || '').trim();
+    const fromTime = String(r['From Time']     || '').trim();
+    const toTime   = String(r['To Time']       || '').trim();
+    const duration = parseFloat(r['Duration (hrs)']) || 2.5;
+    if (weekday) secMap.get(name).slots.push({ weekday, fromTime, toTime, duration });
+  });
+  sem.sections = [...secMap.values()];
+
+  // Areas
+  const areaMap = new Map();
+  toObjects('Areas').forEach(r => {
+    const sn = String(r['Short Name'] || '').trim(); if (!sn) return;
+    if (!areaMap.has(sn)) {
+      const excStr = String(r['Excluded Dates (YYYY-MM-DD)'] || r['Excluded Dates (YYYY-MM-DD comma-sep)'] || '').trim();
+      const excludedDates = excStr ? excStr.split(',').map(d => d.trim()).filter(Boolean) : [];
+      areaMap.set(sn, { name: String(r['Area Name'] || sn).trim(), shortName: sn, slots: [], excludedDates });
+    }
+    const weekday  = String(r['Weekday']   || '').trim();
+    const fromTime = String(r['From Time'] || '').trim();
+    const toTime   = String(r['To Time']   || '').trim();
+    const duration = parseFloat(r['Duration (hrs)']) || 2.5;
+    if (weekday) areaMap.get(sn).slots.push({ weekday, fromTime, toTime, duration });
+  });
+  sem.areas = [...areaMap.values()];
+
+  // Courses
+  sem.courses = toObjects('Courses').map(r => {
+    const code  = String(r['Course Code']  || '').trim();
+    const title = String(r['Course Title'] || '').trim();
+    if (!code || !title) return null;
+    return {
+      code, title,
+      shortTitle:          String(r['Short Title']          || '').trim(),
+      areaShortName:       String(r['Area Short Name']      || '').trim(),
+      maxSessionsPerMonth: parseInt(r['Max Sessions / Month']) || 0,
+      credit:              parseFloat(r['Credit'])    || 0,
+      duration:            parseFloat(r['Duration'])  || 0,
+      requiredSlots:       parseInt(r['Required Slots']) || 0,
+    };
+  }).filter(Boolean);
+
+  // Faculty
+  sem.faculty = toObjects('Faculty').map(r => {
+    const fullName  = String(r['Full Name']  || '').trim();
+    const shortName = String(r['Short Name'] || '').trim();
+    if (!fullName || !shortName) return null;
+    const slotsStr = String(
+      r['Unavailable Slots (YYYY-MM-DD|HH:MM-HH:MM;...)'] ||
+      r['Unavailable Slots (date|HH:MM-HH:MM;...)']       || ''
+    ).trim();
+    const unavailableSlots = [];
+    if (slotsStr) {
+      slotsStr.split(';').forEach(entry => {
+        const t = entry.trim(); if (!t) return;
+        const pi = t.indexOf('|');
+        if (pi === -1) {
+          unavailableSlots.push({ date: t, fromTime: '', toTime: '' });
+        } else {
+          const date = t.slice(0, pi);
+          const [fromTime = '', toTime = ''] = t.slice(pi + 1).split('-');
+          unavailableSlots.push({ date, fromTime, toTime });
+        }
+      });
+    }
+    return { fullName, shortName, maxLoadPerDay: parseInt(r['Max Load Per Day']) || 2, unavailableSlots };
+  }).filter(Boolean);
+
+  // Mapping (legacy may have Section or not)
+  toObjects('Mapping').forEach(r => {
+    const section          = String(r['Section']            || '').trim();
+    const courseCode       = String(r['Course Code']        || '').trim();
+    const facultyShortName = String(r['Faculty Short Name'] || '').trim();
+    if (!courseCode || !facultyShortName) return;
+    if (section) sem.sectionMappings.push({ section, courseCode, facultyShortName });
+    else         sem.areaMappings.push({ courseCode, facultyShortName });
+  });
+
+  // Conflicts
+  toObjects('Conflicts').forEach(r => {
+    const coursesStr  = String(r['Courses']  || '').trim();
+    const sectionsStr = String(r['Sections'] || '').trim();
+    if (!coursesStr) return;
+    const courses  = coursesStr.split(',').map(c => c.trim()).filter(Boolean);
+    const sections = sectionsStr ? sectionsStr.split(',').map(s => s.trim()).filter(Boolean) : [];
+    if (courses.length >= 2) sem.courseConflicts.push({ courses, sections });
+  });
+
+  // Constraints
+  const csRows = toObjects('Constraints');
+  if (csRows.length) {
+    const kv = Object.fromEntries(
+      csRows.filter(r => r['Setting']).map(r => [String(r['Setting']).trim(), r['Value']])
+    );
+    sem.constraintConfig = {
+      facultyUnavailability: _toBool(kv['facultyUnavailability'] ?? true),
+      courseConflicts:       _toBool(kv['courseConflicts']       ?? true),
+      consecutiveRule: {
+        enabled:        _toBool(kv['consecutiveRule.enabled']         ?? true),
+        maxConsecutive: parseInt(kv['consecutiveRule.maxConsecutive'])  || 2,
+        periodUnit:     String(kv['consecutiveRule.periodUnit']   || 'weeks').trim(),
+        resetBoundary:  String(kv['consecutiveRule.resetBoundary'] || 'month').trim(),
+      },
+      spreadingRule: {
+        enabled: _toBool(kv['spreadingRule.enabled'] ?? true),
+        weight:  parseFloat(kv['spreadingRule.weight']) || 0.1,
+      },
+    };
+  }
+
+  return sem;
+}
+
+/* ── Parse the Timetable sheet (identical structure for both formats) ── */
+function _parseTimetableSheet(rows, importedSemesters) {
+  const result = { timetable: [], meta: null };
+  if (!rows.length || rows.length < 2) return result;
+
+  // Build lookup maps across all imported semesters
+  const courseByShort = {}, courseByCode = {}, facultyByShort = {};
+  (importedSemesters || []).forEach(sem => {
+    (sem.courses || []).forEach(c => {
+      if (c.shortTitle) courseByShort[c.shortTitle] = c;
+      courseByCode[c.code] = c;
+    });
+    (sem.faculty || []).forEach(f => { facultyByShort[f.shortName] = f; });
+  });
+
+  const header    = rows[0].map(h => String(h || '').trim());
+  const fixedCols = new Set(['Date', 'Day', 'From Time', 'To Time']);
+  const meta      = {};
+
+  rows.slice(1).forEach(row => {
+    const obj = Object.fromEntries(header.map((h, i) => [h, String(row[i] || '').trim()]));
+
+    // Metadata sentinels
+    if (obj['Date'] === '__META__') {
+      const k = obj['Day'], v = obj['From Time'];
+      if (k === 'Status')       meta.status         = v;
+      if (k === 'Generated At') meta.timestamp       = normalizeTimestamp(v) || v;
+      if (k === 'Constraint')   meta.constraintType  = v;
+      if (k === 'Penalty')      meta.penalty         = v;
+      return;
+    }
+    if (!obj['Date']) return;
+
+    const date      = obj['Date'];
+    const day       = obj['Day'];
+    const fromTime  = obj['From Time'];
+    const toTime    = obj['To Time'];
+    const timeLabel = `${fromTime} - ${toTime}`;
+
+    Object.keys(obj).filter(col => !fixedCols.has(col)).forEach(col => {
+      const cellVal = obj[col]; if (!cellVal) return;
+      const section = col.trim();
+
+      cellVal.split(/\s*\/\s*/).map(s => s.trim()).filter(Boolean).forEach(part => {
+        const match      = part.match(/^(.+?)\s*\((.+)\)$/);
+        const rawShort   = match ? match[1].trim() : part;
+        const facShort   = match ? match[2].trim() : '';
+        const course     = courseByShort[rawShort] || courseByCode[rawShort] || null;
+        const courseCode  = course ? course.code       : rawShort;
+        const courseTitle = course ? course.title      : rawShort;
+        const courseShort = course ? course.shortTitle : rawShort;
+        const facObj      = facultyByShort[facShort]  || null;
+        const faculty     = facObj ? facObj.fullName   : facShort;
+        result.timetable.push({
+          date, day, fromTime, toTime, timeLabel,
+          section, courseCode, courseTitle, courseShort,
+          facultyShort: facShort, faculty,
+        });
+      });
+    });
+  });
+
+  result.meta = Object.keys(meta).length
+    ? meta
+    : (result.timetable.length
+        ? { status: 'imported', timestamp: utcNowIso(), constraintType: 'imported', penalty: '?' }
+        : null);
+
+  return result;
+}
+
 // WIRE UP BUTTONS
-document.getElementById('export-btn').addEventListener('click', exportToExcel);
- 
+// ── Import button — updated hasData check ──
 document.getElementById('import-btn').addEventListener('click', () => {
-  // Warn if data already exists
-  const hasData = State.sections.length || State.courses.length || State.faculty.length || State.sectionMappings.length || State.areaMappings.length || State.timetable?.length;
+  const hasData = State.semesters.length || State.timetable?.length;
   if (hasData) {
     confirm2(
       'Import & Overwrite',
-      'Importing will replace all current sections, courses, faculty, mappings, and timetable data. Continue?',
+      'Importing will replace all current semester configurations and timetable data. Continue?',
       () => document.getElementById('import-file-input').click()
     );
   } else {
     document.getElementById('import-file-input').click();
   }
 });
- 
+
 document.getElementById('import-file-input').addEventListener('change', e => {
   const file = e.target.files[0];
-  if (file) {
-    importFromExcel(file);
-    e.target.value = ''; // reset so same file can be re-imported
-  }
+  if (file) { importFromExcel(file); e.target.value = ''; }
+});
+
+document.getElementById('export-btn').addEventListener('click', exportToExcel);
+
+// Reset button
+document.getElementById('reset-btn').addEventListener('click', () => {
+  confirm2(
+    'Reset All Data',
+    'This will permanently delete all semester configurations and the generated timetable. This cannot be undone.',
+    () => {
+      Object.values(KEY).forEach(k => localStorage.removeItem(k));
+      location.reload();
+    }
+  );
 });

@@ -581,3 +581,138 @@ tr:hover td.tt-sticky-2 {
 .constraint-toggle strong { font-size: .9rem; color: var(--text); }
 .constraint-toggle p { font-size: .82rem; color: var(--text2); margin-top: .2rem; }
 .constraint-detail { margin-left: 27px; }
+
+/* ─── MULTI-SEMESTER CARDS ─────────────────────────────────── */
+.sem-add-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1.25rem;
+  flex-wrap: wrap;
+  gap: .75rem;
+}
+
+.sem-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--rl);
+  margin-bottom: .75rem;
+  overflow: hidden;
+  transition: border-color .2s, box-shadow .2s;
+}
+.sem-card.expanded {
+  border-color: var(--gold);
+  box-shadow: 0 0 0 2px var(--gold-dim);
+}
+
+/* ── Card Header ── */
+.sem-card-header {
+  display: flex;
+  align-items: center;
+  gap: .65rem;
+  padding: .8rem 1.1rem;
+}
+.sem-card.expanded .sem-card-header {
+  border-bottom: 1px solid var(--border);
+}
+
+/* ── Semester Name Input ── */
+.sem-name-input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r);
+  color: var(--text);
+  font-family: var(--font-d);
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: .01em;
+  padding: .3rem .5rem;
+  outline: none;
+  transition: border-color .15s, background .15s, box-shadow .15s;
+}
+.sem-name-input[readonly] {
+  cursor: default;
+}
+.sem-name-input:not([readonly]) {
+  border-color: var(--border-focus);
+  background: var(--surface);
+  box-shadow: 0 0 0 2px var(--gold-dim);
+  cursor: text;
+}
+
+/* ── Action Buttons (edit / save / delete) ── */
+.sem-header-actions {
+  display: flex;
+  align-items: center;
+  gap: .3rem;
+  flex-shrink: 0;
+}
+
+.sem-icon-btn {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text2);
+  width: 30px;
+  height: 30px;
+  border-radius: var(--r);
+  cursor: pointer;
+  font-size: .85rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all .15s;
+  padding: 0;
+  flex-shrink: 0;
+}
+.sem-icon-btn:hover {
+  border-color: var(--text2);
+  color: var(--text);
+  background: var(--surface);
+}
+.sem-icon-btn.sem-delete-btn {
+  border-color: rgba(214,69,69,.35);
+  color: var(--red);
+}
+.sem-icon-btn.sem-delete-btn:hover {
+  background: var(--red);
+  border-color: var(--red);
+  color: #fff;
+}
+.sem-icon-btn.sem-save-active {
+  border-color: rgba(46,157,106,.35);
+  color: var(--green);
+}
+.sem-icon-btn.sem-save-active:hover {
+  background: var(--green);
+  border-color: var(--green);
+  color: #fff;
+}
+
+/* ── Toggle (expand / collapse) arrow ── */
+.sem-toggle-btn {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: .3rem .45rem;
+  border-radius: var(--r);
+  font-size: .8rem;
+  line-height: 1;
+  flex-shrink: 0;
+  transition: color .15s, background .15s;
+}
+.sem-toggle-btn:hover {
+  color: var(--text);
+  background: var(--card2);
+}
+
+/* ── Card Body ── */
+.sem-card-body {
+  padding: 0 1.25rem 1.5rem;
+}
+
+/* ── Per-card sub-tabs ── */
+.sem-subtab-content { display: none; }
+.sem-subtab-content.active { display: block; }
