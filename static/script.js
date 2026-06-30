@@ -1601,7 +1601,14 @@ function isSectionMode(semId) { return !isAreaMode(semId); }
 // TIMETABLE GENERATION
 const COURSE_PALETTE = ['#4f8ef7','#4caf7d','#c4953a','#9b6af5','#e07d3a','#e05252','#2aa3b8','#b84585'];
 let _courseColorMap = {};
-const TTView = {mode: 'section'}; // section | course | faculty
+const TTView = {
+  mode: 'section', // section | course | faculty
+  activeSemId: null
+};
+
+if (!TTView.activeSemId && State.semesters.length) {
+  TTView.activeSemId = State.semesters[0].id;
+}
 
 function getCourseColor(code) {
   if(!_courseColorMap[code]) {
@@ -1729,24 +1736,67 @@ function switchTTView(mode, el){
   refreshTimetableTab();
 }
 
+function switchTimetableSemester(semId, btn) {
+  TTView.activeSemId = semId;
+
+  document.querySelectorAll('.tt-sem-tab').forEach(b => b.classList.remove('active'));
+  if (btn) btn.classList.add('active');
+
+  resetAllFilters();
+  refreshTimetableTab();
+
+  // If verification is already available, switch it too
+  if (
+    VerifyState.data &&
+    VerifyState.data.perSemester &&
+    VerifyState.data.perSemester[semId]
+  ) {
+    VerifyState.activeSemId = semId;
+    renderVerifySemesterPanel(semId);
+  }
+}
+
 function refreshTimetableTab() {
   const meta = State.timetableMeta;
   const tt   = State.timetable;
+
+  if (!TTView.activeSemId && State.semesters.length) {
+    TTView.activeSemId = State.semesters[0].id;
+  }
+
+  const semTabs = document.getElementById('tt-sem-tabs');
+  if (semTabs) {
+    semTabs.innerHTML = State.semesters.map(sem => `
+      <button
+        class="tt-tab tt-sem-tab ${sem.id === TTView.activeSemId ? 'active' : ''}"
+        onclick="switchTimetableSemester('${sem.id}', this)">
+        ${sem.name}
+      </button>
+    `).join('');
+  }
+
   const noTT = document.getElementById('tt-no-timetable');
   const metaCard = document.getElementById('tt-meta-card');
   const verifyBtn = document.getElementById('verify-btn');
   const exportViewBtn = document.getElementById('export-view-btn');
+  const ttSubTabs = document.getElementById('tt-subtabs');
 
   if(!tt||!tt.length){
-    noTT.style.display='block'; metaCard.style.display='none';
+    noTT.style.display='block'; 
+    metaCard.style.display='none';
     document.getElementById('tt-table-wrap').style.display='none';
     verifyBtn.style.display='none';
     exportViewBtn.style.display='none';
+    semTabs.style.display='none';
+    ttSubTabs.style.display='none';
     return;
   }
-  noTT.style.display='none'; metaCard.style.display='flex';
+  noTT.style.display='none'; 
+  metaCard.style.display='flex';
   verifyBtn.style.display='inline-flex';
   exportViewBtn.style.display='inline-flex';
+  semTabs.style.display='inline-flex';
+  ttSubTabs.style.display='inline-flex';
 
   const ts = new Date(normalizeTimestamp(meta.timestamp));
   document.getElementById('tt-meta-time').textContent = ts.toLocaleString();
@@ -1763,15 +1813,18 @@ function refreshTimetableTab() {
   const stale = isConfigNewerThanTimetable(configEdit, meta.timestamp);
   document.getElementById('tt-stale-warn').style.display = stale?'flex':'none';
 
+  // Show only selected semester timetable
+  const semTT = tt.filter(r => r.semesterId === TTView.activeSemId);
+
   // build color map
   _courseColorMap = {};
-  const allCodes = [...new Set(tt.map(r=>r.courseCode))];
-  allCodes.forEach((_,i)=>{}); // pre-populate order
+  [...new Set(semTT.map(r => r.courseCode))].forEach((_, i) => {});
 
-  document.getElementById('tt-table-wrap').style.display='block';
+  document.getElementById('tt-table-wrap').style.display = 'block';
+
   resetAllFilters();
-  populateFilters(tt);
-  renderTimetableRows();
+  populateFilters(semTT);
+  renderTimetableRows(semTT);
 }
 
 const ActiveFilters = {
@@ -1870,7 +1923,10 @@ function filterThHTML(key, label, stickyClass = '') {
 
 function getTTColumns(tt){
   if(TTView.mode === 'section'){
-    return [...new Set(tt.map(r => r.section))].sort();
+    const sections = [...new Set(tt.map(r => r.section).filter(Boolean))].sort();
+    const areas = [...new Set(tt.map(r => r.areaShortName).filter(Boolean))].sort();
+
+    return [...sections, ...areas];
   }
 
   if(TTView.mode === 'course'){
@@ -1878,16 +1934,16 @@ function getTTColumns(tt){
   }
 
   if(TTView.mode === 'faculty'){
-    return [...new Set(tt.map(r => r.faculty))].sort();
+    return [...new Set(tt.map(r => r.facultyShort))].sort();
   }
 
   return [];
 }
 
 function getCellKey(row){
-  if(TTView.mode === 'section') return row.section;
+  if(TTView.mode === 'section') return row.section || row.areaShortName;
   if(TTView.mode === 'course') return row.courseCode;
-  if(TTView.mode === 'faculty') return row.faculty;
+  if(TTView.mode === 'faculty') return row.facultyShort;
 }
 
 function populateFilters(tt) {
@@ -1922,7 +1978,7 @@ function populateFilters(tt) {
       ${s}
     </label>`).join('');
   const labelMap = {
-    section: TTView.mode === 'section' ? isAreaMode() ? 'Areas' : 'Sections' : TTView.mode === 'course' ? 'Courses' : 'Faculty'
+    section: TTView.mode === 'section' ? isAreaMode(TTView.activeSemId) ? 'Areas' :'Sections' : TTView.mode === 'course' ? 'Courses' : 'Faculty'
   };
   document.getElementById('tt-thead').innerHTML = `
     <tr>
@@ -1979,8 +2035,7 @@ function freezeTheadRow2() {
   });
 }
 
-function renderTimetableRows() {
-  const tt = State.timetable;
+function renderTimetableRows(tt = State.timetable) {
   if (!tt || !tt.length) return;
 
   // 1. Filter by date/day/time filters
@@ -2068,12 +2123,12 @@ function renderTimetableRows() {
           line2 = cell.map(x => x.facultyShort || x.faculty).join(' / ');
         }
         else if (TTView.mode === 'course') {
-          line1 = cell.map(x => x.section).join(' / ');
+          line1 = cell.map(x => x.section || x.areaShortName).join(' / ');
           line2 = cell.map(x => x.facultyShort || x.faculty).join(' / ');
         }
         else if (TTView.mode === 'faculty') {
           line1 = cell.map(x => x.courseShort || x.courseCode).join(' / ');
-          line2 = cell.map(x => x.section).join(' / ');
+          line2 = cell.map(x => x.section || x.areaShortName).join(' / ');
         }
         return `<td style="text-align:center">
           <span class="course-chip"
@@ -2104,7 +2159,9 @@ function updateStaleWarning() {
   if(el) el.style.display = stale?'flex':'none';
 }
 
-// TIMETABLE VERIFICATION
+// ─── TIMETABLE VERIFICATION ───────────────────────────────────
+let VerifyState = { data: null, activeSemId: null };
+
 async function verifyTimetable() {
   if (!State.timetable || !State.timetable.length) {
     toast('No timetable to verify.', 'warning'); return;
@@ -2123,8 +2180,6 @@ async function verifyTimetable() {
     btn.disabled = false; btn.innerHTML = '✓ Verify Timetable';
     if (data.status === 'error') { toast(data.message, 'error'); return; }
     renderVerifyResults(data);
-    document.getElementById('verify-results').style.display = 'block';
-    document.getElementById('verify-results').scrollIntoView({ behavior: 'smooth', block: 'start' });
   } catch(e) {
     btn.disabled = false; btn.innerHTML = '✓ Verify Timetable';
     toast('Verification request failed.', 'error');
@@ -2132,330 +2187,238 @@ async function verifyTimetable() {
   }
 }
 
+/* ── Generic helper: render an array of objects as a table when the exact
+      shape is not known ahead of time (used for newer / less common
+      violation arrays such as monthlyLimitViolations). ── */
+function _fmtCell(v) {
+  if (Array.isArray(v)) return v.join(', ');
+  if (v && typeof v === 'object') return JSON.stringify(v);
+  return v === undefined || v === null || v === '' ? '—' : String(v);
+}
+function _titleCase(key) {
+  return key.replace(/([A-Z])/g, ' $1').replace(/^./, c => c.toUpperCase()).trim();
+}
+function renderGenericViolationTable(title, icon, arr) {
+  if (!arr || !arr.length) return '';
+  const cols = Object.keys(arr[0]);
+  return `
+    <div class="verify-section">
+      <div class="verify-section-title">${icon} ${title} (${arr.length} found)</div>
+      <div class="table-wrap" style="max-height:280px">
+        <table class="data-table">
+          <thead><tr>${cols.map(c => `<th>${_titleCase(c)}</th>`).join('')}</tr></thead>
+          <tbody>${arr.map(r => `<tr>${cols.map(c => `<td>${_fmtCell(r[c])}</td>`).join('')}</tr>`).join('')}</tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+/* ── Top-level entry point: stores data, builds cross-semester section
+      and semester subtabs, then renders the first semester's panel. ── */
 function renderVerifyResults(data) {
+  VerifyState.data = data;
+
+  if (!TTView.activeSemId) {
+    const semIds = Object.keys(data.perSemester || {});
+    VerifyState.activeSemId = semIds[0] || null;
+  } else {
+    VerifyState.activeSemId = TTView.activeSemId;
+  }
+
   const wrap = document.getElementById('verify-results');
   wrap.style.display = 'block';
-  wrap.scrollIntoView({behavior:'smooth', block:'start'});
+  wrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
-  // stat cards
-  const sessionViol = data.sessionCount.reduce((sum, r) => sum + r.scheduled, 0);
-  const requiredSessionCount = data.sessionCount.reduce((sum, r) => sum + r.required, 0);
-  const slotViol = data.slotAssignmentViolations.length;
-  const loadViol = data.facultyLoad.length;
-  const consec = data.consecutiveViolationsPenalty;
-  const clone = data.cloneViolations.length;
-  const spacing = data.spacingViolations.length;
-  const unavail = data.unavailViolations.length;
-  const conflict = data.conflictViolations.length;
-  const spread = data.spreadingViolationsPenalty;
+  renderVerifySemesterPanel(VerifyState.activeSemId);
+}
+
+/* ── Per-semester panel: stats grid + violation tables + heatmap ── */
+function renderVerifySemesterPanel(semId) {
+  const container = document.getElementById('verify-sem-panel');
+  if (!container) return;
+  const data = VerifyState.data;
+  const cs = data.crossSemester || {cloneViolations: [], facultyLoad: []}
+  const sem  = data && data.perSemester ? data.perSemester[semId] : null;
+
+  if (!sem) {
+    container.innerHTML = `<div class="empty-state"><div class="empty-icon">📋</div><p>No verification data for this semester.</p></div>`;
+    return;
+  }
+
+  const sessionViol = sem.sessionViol || [];
+  const sessionCount = sessionViol.reduce((sum, r) => sum + r.scheduled, 0);
+  const requiredSessionCount = sessionViol.reduce((sum, r) => sum + r.required, 0);
+  const slotViol = sem.slotAssignmentViolations || [];
+  const spacingViol = sem.spacingViolations || [];
+  const clone = cs.cloneViolations || [];
+  const load  = cs.facultyLoad     || [];
+  const unavailViol = sem.unavailViolations || [];
+  const conflictViol = sem.conflictViolations || [];
+  const consecViol = sem.consecutiveViolations || [];
+  const consecPenalty = sem.consecutiveViolationsPenalty || 0;
+  const spreadPenalty = sem.spreadingViolationsPenalty || 0;
+  const monthlyViol = sem.monthlyLimitViolations || [];
 
   const stats = [
-    {val:sessionViol===0?'✓':`${sessionViol} / ${requiredSessionCount}`, label:'Session Count', cls:sessionViol===0?'ok':'fail'},
-    {val:loadViol===0?'✓':loadViol, label:'Load Violations', cls:loadViol===0?'ok':'fail'},
-    {val:slotViol===0?'✓':slotViol, label:'Slot Violations', cls:slotViol===0?'ok':'fail'},
-    {val:clone===0?'✓':clone, label:'Cloning Violations', cls:clone===0?'ok':'fail'},
-    {val:spacing===0?'✓':spacing, label:'Spacing Violations', cls:spacing===0?'ok':'fail'},
-    {val:unavail===0?'✓':unavail, label:'Unavailability', cls:unavail===0?'ok':'fail'},
-    {val:conflict===0?'✓':conflict, label:'Course conflicts', cls:conflict===0?'ok':'fail'},
-    {val:consec===0?'✓':consec, label:'Consecutive Violations', cls:consec===0?'ok':'fail'},
-    {val:spread===0?'✓':spread, label:'Spreading Violations', cls:spread===0?'ok':'fail'}
-  ]
-  document.getElementById('verify-stats').innerHTML = stats.map(s=>`<div class="verify-stat ${s.cls}">
-    <div class="vs-val">${s.val}</div>
-    <div class="vs-label">${s.label}</div>
-  </div>`).join('');
+    {val:sessionViol.length===0?'✓':`${sessionCount} / ${requiredSessionCount}`, label:'Session Count', cls:sessionViol.length===0?'ok':'fail'},
+    {val:slotViol.length===0?'✓':slotViol.length, label:'Slot Violations', cls:slotViol.length===0?'ok':'fail'},
+    {val:spacingViol.length===0?'✓':spacingViol.length, label:'Spacing Violations', cls:spacingViol.length===0?'ok':'fail'},
+    {val:clone.length===0?'✓':clone.length, label:'Faculty Cloning violation', cls:clone.length===0?'ok':'fail'},
+    {val:load.length===0?'✓':load.length, label:'Faculty Load violation', cls:load.length===0?'ok':'fail'},
+  ];
+  const activeSemConstraintConfig = getSem(TTView.activeSemId)?.constraintConfig || defaultConstraintConfig();
+  if (monthlyViol.length || sem.monthlyLimitViolations !== undefined) {
+    stats.push({val:monthlyViol.length===0?'✓':monthlyViol.length, label:'Monthly Limit Violations', cls:monthlyViol.length===0?'ok':'fail'});
+  }
+  if (activeSemConstraintConfig?.facultyUnavailability) {
+    stats.push({val:unavailViol.length===0?'✓':unavailViol.length, label:'Faculty Unavailability', cls:unavailViol.length===0?'ok':'fail'});
+  }
+  if (activeSemConstraintConfig?.courseConflicts) {
+    stats.push({val:conflictViol.length===0?'✓':conflictViol.length, label:'Course Conflicts', cls:conflictViol.length===0?'ok':'fail'});
+  }
+  if (activeSemConstraintConfig?.consecutiveRule?.enabled) {
+    stats.push({val:consecViol.length===0?'✓':consecViol.length, label:'Consecutive Rule Violations', cls:consecViol.length===0?'ok':'fail'});
+  }
+  if (activeSemConstraintConfig?.spreadingRule?.enabled) {
+    stats.push({val:spreadPenalty===0?'✓':spreadPenalty, label:'Spreading Rule Violations', cls:spreadPenalty===0?'ok':'fail'});
+  }
 
-  let html = '';
+  let html = `<div class="verify-grid" style="margin-bottom:1.25rem">${stats.map(s=>`
+    <div class="verify-stat ${s.cls}">
+      <div class="vs-val">${s.val}</div>
+      <div class="vs-label">${s.label}</div>
+    </div>`).join('')}</div>`;
 
   // 1. Session count violations
-  if(sessionViol > 0){
+  if (sessionViol.length) {
     html += `
     <div class="verify-section">
-      <div class="verify-section-title">
-        ❌ Session Count Violations
-      </div>
-
+      <div class="verify-section-title">❌ Session Count Violations</div>
       <div class="table-wrap" style="max-height:280px">
         <table class="data-table">
-
-          <thead>
-            <tr>
-              <th>Section</th>
-              <th>Course</th>
-              <th>Required</th>
-              <th>Scheduled</th>
-            </tr>
-          </thead>
-
-          <tbody>
-
-            ${data.sessionCount.map(r=>`
-
-              <tr>
-
-                <td>
-                  <span class="badge badge-gold">${r.section}</span>
-                </td>
-
-                <td>
-                  <span class="badge badge-blue"
-                    style="font-family:var(--font-m)">
-                    ${r.course}
-                  </span>
-                </td>
-
-                <td style="text-align:center">
-                  ${r.required}
-                </td>
-
-                <td style="text-align:center">
-                  <span class="badge badge-red">
-                    ${r.scheduled}
-                  </span>
-                </td>
-
-              </tr>
-
-            `).join('')}
-
-          </tbody>
-
+          <thead><tr><th>Section</th><th>Course</th><th>Required</th><th>Scheduled</th></tr></thead>
+          <tbody>${sessionViol.map(r=>`<tr>
+            <td><span class="badge badge-gold">${r.section || r.areaShortName || '—'}</span></td>
+            <td><span class="badge badge-blue" style="font-family:var(--font-m)">${r.course}</span></td>
+            <td style="text-align:center">${r.required}</td>
+            <td style="text-align:center"><span class="badge badge-red">${r.scheduled}</span></td>
+          </tr>`).join('')}</tbody>
         </table>
       </div>
-    </div>
-    `;
+    </div>`;
   }
 
-  // 2. Faculty load violations
-  if(loadViol > 0){
+  // 2. Slot assignment violations
+  if (slotViol.length) {
     html += `
     <div class="verify-section">
-
-      <div class="verify-section-title">
-        ❌ Faculty Daily Load Violations
-      </div>
-
-      <div class="table-wrap" style="max-height:280px">
-
-        <table class="data-table">
-
-          <thead>
-            <tr>
-              <th>Faculty</th>
-              <th>Date</th>
-              <th>Sessions</th>
-              <th>Max Allowed</th>
-            </tr>
-          </thead>
-
-          <tbody>
-
-            ${data.facultyLoad.map(r=>`
-
-              <tr>
-
-                <td>${r.faculty}</td>
-
-                <td style="font-family:var(--font-m);font-size:.8rem">
-                  ${r.date}
-                </td>
-
-                <td style="text-align:center">
-                  <span class="badge badge-red">
-                    ${r.sessions}
-                  </span>
-                </td>
-
-                <td style="text-align:center">
-                  ${r.maxAllowed}
-                </td>
-
-              </tr>
-
-            `).join('')}
-
-          </tbody>
-
-        </table>
-
-      </div>
-
-    </div>
-    `;
-  }
-
-  // 3. Slot assignment violations
-  if(slotViol > 0){
-    html += `
-    <div class="verify-section">
-
-      <div class="verify-section-title">
-        ❌ Slot Assignment Violations
-      </div>
-
+      <div class="verify-section-title">❌ Slot Assignment Violations</div>
       <div class="table-wrap">
-
         <table class="data-table">
-
-          <thead>
-            <tr>
-              <th>Section</th>
-              <th>Date</th>
-              <th>Time</th>
-              <th>Assigned Courses</th>
-              <th>Count</th>
-            </tr>
-          </thead>
-
-          <tbody>
-
-            ${data.slotAssignmentViolations.map(r=>`
-
-              <tr>
-
-                <td>
-                  <span class="badge badge-gold">
-                    ${r.section}
-                  </span>
-                </td>
-
-                <td style="font-family:var(--font-m)">
-                  ${r.date}
-                </td>
-
-                <td style="font-family:var(--font-m)">
-                  ${r.fromTime} - ${r.toTime}
-                </td>
-
-                <td>
-                  ${r.assignedCourses.join(', ')}
-                </td>
-
-                <td style="text-align:center">
-                  <span class="badge badge-red">
-                    ${r.count}
-                  </span>
-                </td>
-
-              </tr>
-
-            `).join('')}
-
-          </tbody>
-
+          <thead><tr><th>Section</th><th>Date</th><th>Time</th><th>Assigned Courses</th><th>Count</th></tr></thead>
+          <tbody>${slotViol.map(r=>`<tr>
+            <td><span class="badge badge-gold">${r.section || r.areaShortName || '—'}</span></td>
+            <td style="font-family:var(--font-m)">${r.date}</td>
+            <td style="font-family:var(--font-m)">${r.fromTime} - ${r.toTime}</td>
+            <td>${(r.assignedCourses||[]).join(', ')}</td>
+            <td style="text-align:center"><span class="badge badge-red">${r.count}</span></td>
+          </tr>`).join('')}</tbody>
         </table>
-
       </div>
-
-    </div>
-    `;
+    </div>`;
   }
 
-  // 4. Cloning violations
-  if(clone>0){
-    html += `<div class="verify-section"><div class="verify-section-title">❌ Faculty Cloning Violations</div>
-      <div class="table-wrap"><table class="data-table"><thead><tr><th>Faculty</th><th>Date</th><th>Time</th><th>Sections</th></tr></thead>
-      <tbody>${data.cloneViolations.map(r=>`<tr><td>${r.faculty}</td><td>${r.date}</td><td>${r.time}</td><td>${r.sections.join(', ')}</td></tr>`).join('')}</tbody>
-      </table></div></div>`;
+  // 3. Spacing violations
+  if (spacingViol.length) {
+    html += `
+    <div class="verify-section">
+      <div class="verify-section-title">❌ Course Spacing Violations (same course twice in one day)</div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead><tr><th>Section</th><th>Course</th><th>Date</th><th>Count</th></tr></thead>
+          <tbody>${spacingViol.map(r=>`<tr>
+            <td>${r.section || r.areaShortName || '—'}</td><td>${r.course}</td><td>${r.date}</td><td>${r.count}</td>
+          </tr>`).join('')}</tbody>
+        </table>
+      </div>
+    </div>`;
   }
 
-  // 5. Spacing violations
-  if(spacing>0){
-    html += `<div class="verify-section"><div class="verify-section-title">❌ Course Spacing Violations (same course twice in one day)</div>
-      <div class="table-wrap"><table class="data-table"><thead><tr><th>Section</th><th>Course</th><th>Date</th><th>Count</th></tr></thead>
-      <tbody>${data.spacingViolations.map(r=>`<tr><td>${r.section}</td><td>${r.course}</td><td>${r.date}</td><td>${r.count}</td></tr>`).join('')}</tbody>
-      </table></div></div>`;
+  // 4. Faculty clone violations
+  if (clone.length) {
+    const cols = Object.keys(clone[0]);
+    html += `
+    <div class="verify-section">
+      <div class="verify-section-title">❌ Faculty Cloning Violations</div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead><tr>${cols.map(c=>`<th>${_titleCase(c)}</th>`).join('')}</tr></thead>
+          <tbody>${clone.map(r=>`<tr>${cols.map(c=>`<td>${_fmtCell(r[c])}</td>`).join('')}</tr>`).join('')}</tbody>
+        </table>
+      </div>
+    </div>`;
+  }
+
+  // 5. Faculty load violations
+  if (load.length) {
+    const cols = Object.keys(load[0]);
+    html += `
+    <div class="verify-section">
+      <div class="verify-section-title">❌ Faculty Daily Load Violations</div>
+      <div class="table-wrap">
+      <table class="data-table">
+        <thead><tr>${cols.map(c=>`<th>${_titleCase(c)}</th>`).join('')}</tr></thead>
+        <tbody>${load.map(r=>`<tr>${cols.map(c=>`<td>${_fmtCell(r[c])}</td>`).join('')}</tr>`).join('')}</tbody>
+      </table>
+    </div>`;
   }
 
   // 6. Faculty unavailability violations
-  if(unavail>0){
-    html += `<div class="verify-section"><div class="verify-section-title">❌ Unavailability Violations</div>
-      <div class="table-wrap"><table class="data-table"><thead><tr><th>Faculty</th><th>Date</th><th>Section</th><th>Course</th></tr></thead>
-      <tbody>${data.unavailViolations.map(r=>`<tr><td>${r.faculty}</td><td>${r.date}</td><td>${r.section}</td><td>${r.course}</td></tr>`).join('')}</tbody>
-      </table></div></div>`;
+  if (unavailViol.length) {
+    html += `
+    <div class="verify-section">
+      <div class="verify-section-title">❌ Unavailability Violations</div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead><tr><th>Faculty</th><th>Date</th><th>Section</th><th>Course</th></tr></thead>
+          <tbody>${unavailViol.map(r=>`<tr>
+            <td>${r.faculty}</td><td>${r.date}</td><td>${r.section || r.areaShortName || '—'}</td><td>${r.course}</td>
+          </tr>`).join('')}</tbody>
+        </table>
+      </div>
+    </div>`;
   }
 
   // 7. Course conflict violations
-  if(conflict > 0){
+  if (conflictViol.length) {
     html += `
     <div class="verify-section">
-
-      <div class="verify-section-title">
-        ❌ Course Conflict Violations
-      </div>
-
+      <div class="verify-section-title">❌ Course Conflict Violations</div>
       <div class="table-wrap">
-
         <table class="data-table">
-
-          <thead>
-            <tr>
-              <th>Group</th>
-              <th>Date</th>
-              <th>Time</th>
-              <th>Courses</th>
-              <th>Sections</th>
-              <th>Count</th>
-            </tr>
-          </thead>
-
-          <tbody>
-
-            ${data.conflictViolations.map(r=>`
-
-              <tr>
-
-                <td>
-                  <span class="badge badge-red">
-                    ${r.groupIndex}
-                  </span>
-                </td>
-
-                <td style="font-family:var(--font-m)">
-                  ${r.date}
-                </td>
-
-                <td style="font-family:var(--font-m)">
-                  ${r.time}
-                </td>
-
-                <td>
-                  ${r.courses.join(', ')}
-                </td>
-
-                <td>
-                  ${r.sections.join(', ')}
-                </td>
-
-                <td style="text-align:center">
-                  <span class="badge badge-red">
-                    ${r.count}
-                  </span>
-                </td>
-
-              </tr>
-
-            `).join('')}
-
-          </tbody>
-
+          <thead><tr><th>Group</th><th>Date</th><th>Time</th><th>Courses</th><th>Sections</th><th>Count</th></tr></thead>
+          <tbody>${conflictViol.map(r=>`<tr>
+            <td><span class="badge badge-red">${r.groupIndex}</span></td>
+            <td style="font-family:var(--font-m)">${r.date}</td>
+            <td style="font-family:var(--font-m)">${r.time}</td>
+            <td>${(r.courses||[]).join(', ')}</td>
+            <td>${(r.sections||[]).join(', ')}</td>
+            <td style="text-align:center"><span class="badge badge-red">${r.count}</span></td>
+          </tr>`).join('')}</tbody>
         </table>
-
       </div>
-
-    </div>
-    `;
+    </div>`;
   }
-  
+
   // 8. Consecutive violations
-  if (consec>0) {
+  if (consecPenalty > 0 && consecViol.length) {
     html += `
     <div class="verify-section">
-      <div class="verify-section-title">❌ Consecutive Violations — ${consec} found</div>
+      <div class="verify-section-title">❌ Consecutive Violations (${consecPenalty} penalty)</div>
       <div class="table-wrap">
         <table class="data-table">
           <thead><tr><th>Section</th><th>Course</th><th>Window Start</th><th>Window End</th><th>Length</th></tr></thead>
-          <tbody>${data.consecutiveViolations.map(r=>`<tr>
+          <tbody>${consecViol.map(r=>`<tr>
             <td><span class="badge badge-gold">${r.section || 'All Areas'}</span></td>
             <td><span class="badge badge-blue" style="font-family:var(--font-m)">${r.course}</span></td>
             <td style="font-family:var(--font-m);font-size:.8rem">${r.periodStart}</td>
@@ -2464,40 +2427,43 @@ function renderVerifyResults(data) {
           </tr>`).join('')}</tbody>
         </table>
       </div>
-    </div>
-    `;
+    </div>`;
   }
 
-  // 9. Week distribution heatmap
+  // 9. Monthly limit violations (areas mode) — generic renderer, shape not fixed
+  html += renderGenericViolationTable('Monthly Session Limit Violations', '❌', monthlyViol);
+
+  // 10. Week distribution heatmap (per-section/area, scoped to this semester)
+  const dist = sem.weekDistribution || {};
+  const keys = Object.keys(dist);
   html += `<div class="verify-section">
     <div class="verify-section-title">📊 Week-Course Distribution</div>
     <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.75rem" id="hm-section-btns"></div>
     <div id="hm-content"></div>
   </div>`;
 
-  document.getElementById('verify-details').innerHTML = html;
+  container.innerHTML = html;
 
-  // Build heatmaps
-  const sections = Object.keys(data.weekDistribution).sort();
-  const hmbtnEl = document.getElementById('hm-section-btns');
-  const hmContent = document.getElementById('hm-content');
-  sections.forEach((s,i)=>{
-    const btn=document.createElement('button');
-    btn.className='section-filter-btn'+(i===0?' active':'');
-    btn.textContent=isAreaMode() ? 'Area ' + s : 'Section ' + s;
-    btn.addEventListener('click',()=>{
-      hmbtnEl.querySelectorAll('.section-filter-btn').forEach(b=>b.classList.remove('active'));
+  const semObj   = getSem(semId);
+  const areaMode = semObj ? semObj.configMode === 'areas' : false;
+  const hmBtnEl  = document.getElementById('hm-section-btns');
+  const hmContent= document.getElementById('hm-content');
+  keys.sort().forEach((k, i) => {
+    const btn = document.createElement('button');
+    btn.className = 'section-filter-btn' + (i===0 ? ' active' : '');
+    btn.textContent = (areaMode ? 'Area ' : 'Section ') + k;
+    btn.addEventListener('click', () => {
+      hmBtnEl.querySelectorAll('.section-filter-btn').forEach(b=>b.classList.remove('active'));
       btn.classList.add('active');
-      renderHeatmap(data.weekDistribution[s], hmContent);
+      renderHeatmap(dist[k], hmContent);
     });
-    hmbtnEl.appendChild(btn);
+    hmBtnEl.appendChild(btn);
   });
-  if(sections.length) renderHeatmap(data.weekDistribution[sections[0]], hmContent);
+  if (keys.length) renderHeatmap(dist[keys.sort()[0]], hmContent);
 }
 
 function renderHeatmap(dist, container) {
   const {weeks, weekLabels, courses, data: mat} = dist;
-  // Backward compatible: older payloads only contain numeric ISO week numbers.
   const headers = (Array.isArray(weekLabels) && weekLabels.length === weeks.length)
     ? weekLabels
     : weeks.map(w => `W${w}`);
@@ -2758,7 +2724,7 @@ function getVisibleColumns() {
 }
 function exportVisibleTimetable() {
 
-  const tt = State.timetable;
+  const tt = State.timetable.filter(r => r.semesterId === TTView.activeSemId);;
 
   if (!tt?.length) {
     toast('No timetable available.', 'warning');
@@ -2800,12 +2766,12 @@ function exportVisibleTimetable() {
 
     else if (TTView.mode === 'course') {
       value =
-        `${r.section} (${r.facultyShort || r.faculty})`;
+        `${r.section || r.areaShortName} (${r.facultyShort || r.faculty})`;
     }
 
     else {
       value =
-        `${r.courseShort || r.courseCode} (${r.section})`;
+        `${r.courseShort || r.courseCode} (${r.section || r.areaShortName})`;
     }
 
     const row = pivotMap.get(key);
@@ -2855,12 +2821,12 @@ function exportVisibleTimetable() {
 
   const modeLabel =
     TTView.mode === 'section'
-      ? isAreaMode() ? 'Areas' : 'Sections'
+      ? isAreaMode(TTView.activeSemId) ? 'Areas' : 'Sections'
       : TTView.mode === 'course' ? 'Courses' : 'Faculty';
 
   XLSX.writeFile(
     wb,
-    `Timetable_${modeLabel}_${new Date().toISOString().slice(0,10)}.xlsx`
+    `Timetable_${getSem(TTView.activeSemId)?.name || ''}_${modeLabel}_${new Date().toISOString().slice(0,10)}.xlsx`
   );
 
   toast('Timetable exported.', 'success');
@@ -3294,7 +3260,6 @@ function _parseTimetableSheet(rows, importedSemesters) {
 }
 
 // WIRE UP BUTTONS
-// ── Import button — updated hasData check ──
 document.getElementById('import-btn').addEventListener('click', () => {
   const hasData = State.semesters.length || State.timetable?.length;
   if (hasData) {

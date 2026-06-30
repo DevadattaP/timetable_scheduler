@@ -7,7 +7,7 @@ Install: pip install flask pulp pandas
 
 from flask import Flask, jsonify, request, render_template
 from datetime import datetime, timezone
-from scheduler import run_solver, verify_timetable
+from scheduler import run_solver, run_verifier
 
 app = Flask(__name__)
 
@@ -38,7 +38,7 @@ def verify():
     if not payload:
         return jsonify({"error": "No data received"}), 400
     try:
-        result = verify_timetable(payload["config"], payload["timetable"])
+        result = run_verifier(payload["semesters"], payload["timetable"])
         return jsonify(result)
     except Exception as e:
         import traceback

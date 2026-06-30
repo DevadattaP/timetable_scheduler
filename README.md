@@ -52,7 +52,7 @@ As a Business Analyst, we formulate this as a mathematical optimization problem 
 
 - **Time Overlaps:** A faculty member can teach the same course to two different sections on the same day, provided it does not violate the maximum daily workload constraint. The no-cloning rule applies only to the exact same date–time window, not to the same day in general.
 
-- **Solver:** The model is solved with [PuLP](https://coin-or.github.io/pulp/) using the bundled CBC integer linear programming solver. A 100-second time limit is applied; for large or heavily-constrained configurations the solver may return a feasible (non-optimal) solution within that limit.
+- **Solver:** The model is solved with [PuLP](https://coin-or.github.io/pulp/) using the bundled CBC integer linear programming solver. A 180-second time limit is applied; for large or heavily-constrained configurations the solver may return a feasible (non-optimal) solution within that limit.
 
 ## Setup and Run
 
@@ -80,10 +80,10 @@ As a Business Analyst, we formulate this as a mathematical optimization problem 
 ### For production deployment, you can use [Gunicorn](https://gunicorn.org/)
 
 ```bash
-gunicorn app:app --timeout 120
+gunicorn app:app --timeout 200
 ```
 
-This will start the server at [`http://localhost:8000`.](http://localhost:8000/) with a 120-second timeout for requests. (since solver has timeout 100 seconds.)
+This will start the server at [`http://localhost:8000`.](http://localhost:8000/) with a 200-second timeout for requests. (since solver has timeout 180 seconds.)
 
 ## Features
 

@@ -212,7 +212,7 @@
 <div id="tab-timetable" class="tab-content">
   <div class="section-header">
     <div><h2>Timetable</h2><p>Generate and verify the optimized schedule</p></div>
-    <div class="tt-subtabs">
+    <div id="tt-subtabs" class="tt-subtabs">
       <button class="tt-tab active" onclick="switchTTView('section', this)">Sections / Areas</button>
       <button class="tt-tab" onclick="switchTTView('course', this)">Courses</button>
       <button class="tt-tab" onclick="switchTTView('faculty', this)">Faculty</button>
@@ -238,6 +238,7 @@
     <button class="btn btn-primary btn-lg" id="generate-btn" onclick="generateTimetable()">⚡ Generate Timetable</button>
     <button class="btn btn-blue btn-lg" id="verify-btn" onclick="verifyTimetable()" style="display:none">✓ Verify Timetable</button>
     <button class="btn btn-green btn-lg" id="export-view-btn" onclick="exportVisibleTimetable()">📊 Export View</button>
+    <div id="tt-sem-tabs" class="tt-tabs"></div>
   </div>
 
   <div id="tt-table-wrap" style="display:none">
@@ -253,8 +254,7 @@
     <div class="section-header" style="margin-bottom:1rem">
       <div><h2>Verification Results</h2><p>Constraint satisfaction analysis</p></div>
     </div>
-    <div class="verify-grid" id="verify-stats"></div>
-    <div id="verify-details"></div>
+    <div id="verify-sem-panel"></div>
   </div>
 </div>
 
