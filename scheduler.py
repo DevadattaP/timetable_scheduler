@@ -138,6 +138,8 @@ from datetime import date, datetime, timedelta
 from collections import defaultdict
 from typing import Any, cast
 import re
+import os
+os.environ['PYTHONHASHSEED'] = '0'
 
 
 #  helpers 
@@ -735,7 +737,7 @@ def _solve(data):
     del e   # values already baked into prob constraints; dict not needed at runtime
 
     # Solve
-    solver = pulp.PULP_CBC_CMD(msg=False, timeLimit=180, threads=4)
+    solver = pulp.PULP_CBC_CMD(msg=False, timeLimit=180)
     prob.solve(solver)
 
     status_str = pulp.LpStatus[prob.status]
@@ -1261,7 +1263,7 @@ def _solve_multi(payload):
     prob += (pulp.lpSum(obj_terms) if obj_terms else 0), "obj"
 
     # ---- Solve ----
-    solver = pulp.PULP_CBC_CMD(msg=False, timeLimit=180, threads=4)
+    solver = pulp.PULP_CBC_CMD(msg=False, timeLimit=180)
     prob.solve(solver)
     status_str = pulp.LpStatus[prob.status]
 

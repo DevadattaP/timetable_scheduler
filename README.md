@@ -63,13 +63,20 @@ As a Business Analyst, we formulate this as a mathematical optimization problem 
    cd timetable_scheduler
    ```
 
-2. Install dependencies:
+2. Create a virtual environment (optional but recommended):
+
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # On Windows use `venv\Scripts\activate`
+   ```
+
+3. Install dependencies:
 
    ```bash
    pip install -r requirements.txt
    ```
 
-3. Run the web server:
+4. Run the web server:
 
    ```bash
    python app.py
