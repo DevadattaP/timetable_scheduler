@@ -288,7 +288,7 @@ def _solve(data):
 
     courses_cfg = data["courses"]
     faculty_cfg = data["faculty"]
-    mappings_cfg = data["mappings"]
+    mappings_cfg = data["mappings"] if "mappings" in data else data["areaMappings"] if area_mode else data["sectionMappings"]
 
     COURSES = [c["code"] for c in courses_cfg]
 
@@ -904,7 +904,7 @@ def _solve_multi(payload):
 
         courses_cfg  = sem.get("courses", [])
         faculty_cfg  = sem.get("faculty", [])
-        mappings_cfg = sem.get("mappings", [])
+        mappings_cfg = sem.get("mappings", sem.get("areaMappings", sem.get("sectionMappings", [])))
 
         course_meta = {c["code"]: c for c in courses_cfg}
 

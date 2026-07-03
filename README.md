@@ -97,7 +97,7 @@ This will start the server at [`http://localhost:8000`.](http://localhost:8000/)
   - *Faculty* — add faculty members, set daily workload limits, and mark unavailable timeslots.
   - *Mapping* — assign faculty to teach specific courses (for specific sections if sections mode is selected).
   - *Constraints* — review fixed hard constraints, toggle optional constraints, and configure the consecutive sessions soft constraint (max consecutive periods, period unit, reset boundary), spreading sessions soft constraint (weight for penalty).
-- Import and export the full configuration (sections/areas, courses, faculty, mappings, conflict groups, constraint settings, and generated timetable) as a structured Excel file. [Sections Template](./static/Sections_timetable_config.xlsx) | [Areas Template](./static/Areas_timetable_config.xlsx)
+- Import and export the full configuration (sections/areas, courses, faculty, mappings, conflict groups, constraint settings, and generated timetable) as a structured Excel file. [Template](./static/EPGP_2024-25.xlsx)
 - The solver minimizes consecutive-period violations or/and minimizes the spreading-period violations under the configured soft constraints; if the rules are disabled, it solves for pure feasibility.
 - **Timetable** — view the generated schedule in a filterable pivot table (filter by date, day, time, and section/areas) and export in different ways (sections/area wise or faculty wise or course wise).
 - **Verify** the generated timetable against all active constraints and view a week-by-week course distribution heatmap per section.

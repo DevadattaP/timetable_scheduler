@@ -59,7 +59,7 @@
         <div class="card-title">⚙ How It Works</div>
         <ul class="rule-list">
           <li>Choose either Sections mode or Areas mode, then configure the matching buckets, courses, faculty, mappings, and constraints in the Configure tab.</li>
-          <li>You can import configuration from an Excel file. <a href="{{ url_for('static', filename='Sections_timetable_config.xlsx') }}" download>Sections Template</a> / <a href="{{ url_for('static', filename='Areas_timetable_config.xlsx') }}" download>Areas Template</a></li>
+          <li>You can import configuration from an Excel file. <a href="{{ url_for('static', filename='EPGP_2024-25.xlsx') }}" download>Template</a></li>
           <li>Click <strong>Generate Timetable</strong> to send the configuration to the LP solver.</li>
           <li>The solver always tries to satisfy all enabled <strong>Hard Constraints</strong>.</li>
           <li>If the Consecutive Sessions Rule is enabled, the solver minimizes consecutive-period violations using a <strong>Soft Penalty Objective</strong>.</li>
@@ -237,7 +237,7 @@
   <div class="timetable-actions">
     <button class="btn btn-primary btn-lg" id="generate-btn" onclick="generateTimetable()">⚡ Generate Timetable</button>
     <button class="btn btn-blue btn-lg" id="verify-btn" onclick="verifyTimetable()" style="display:none">✓ Verify Timetable</button>
-    <button class="btn btn-green btn-lg" id="export-view-btn" onclick="exportVisibleTimetable()">📊 Export View</button>
+    <button class="btn btn-green btn-lg" id="export-view-btn" onclick="exportVisibleTimetable()" style="display:none">📊 Export View</button>
     <div id="tt-sem-tabs" class="tt-tabs"></div>
   </div>
 

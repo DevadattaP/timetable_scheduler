@@ -101,6 +101,11 @@ function deleteSemCard(semId) {
       saveSemesters();
       renderSemCards();
       toast(`"${sem.name}" deleted.`, 'warning');
+      // remove objects in timetable list having semesterId = semId
+      if (State.timetable) {
+        State.timetable = State.timetable.filter(item => item.semesterId !== semId);
+      }
+      refreshTimetableTab();
     });
 }
 
@@ -184,6 +189,15 @@ function saveSemName(semId) {
   if (saveBtn) saveBtn.style.display = 'none';
   saveSemesters();
   toast(`Renamed to "${newName}".`, 'success');
+  // rename semesterName in objects in timetable list having semesterId = semId
+    if (State.timetable) {
+      State.timetable.forEach(item => {
+        if (item.semesterId === semId) {
+          item.semesterName = newName;
+        }
+      });
+    }
+  refreshTimetableTab();
 }
 
 /* ── Switch subtab within a card ── */
@@ -1760,8 +1774,14 @@ function refreshTimetableTab() {
   const meta = State.timetableMeta;
   const tt   = State.timetable;
 
-  if (!TTView.activeSemId && State.semesters.length) {
-    TTView.activeSemId = State.semesters[0].id;
+  const activeSemExists = State.semesters.some(
+    s => s.id === TTView.activeSemId
+  );
+
+  if (!activeSemExists) {
+    TTView.activeSemId = State.semesters.length
+      ? State.semesters[0].id
+      : null;
   }
 
   const semTabs = document.getElementById('tt-sem-tabs');
@@ -2244,7 +2264,9 @@ function renderVerifySemesterPanel(semId) {
     container.innerHTML = `<div class="empty-state"><div class="empty-icon">📋</div><p>No verification data for this semester.</p></div>`;
     return;
   }
-
+  // get all together required count form state
+  const originalSem = getSem(semId);
+  const trueReqSlots = originalSem.courses.reduce((sum, c) => sum + (c.requiredSlots || 0), 0) * (originalSem.sections?.length || 1);
   const sessionViol = sem.sessionViol || [];
   const sessionCount = sessionViol.reduce((sum, r) => sum + r.scheduled, 0);
   const requiredSessionCount = sessionViol.reduce((sum, r) => sum + r.required, 0);
@@ -2260,7 +2282,7 @@ function renderVerifySemesterPanel(semId) {
   const monthlyViol = sem.monthlyLimitViolations || [];
 
   const stats = [
-    {val:sessionViol.length===0?'✓':`${sessionCount} / ${requiredSessionCount}`, label:'Session Count', cls:sessionViol.length===0?'ok':'fail'},
+    {val:sessionViol.length===0?'✓':`${trueReqSlots - requiredSessionCount + sessionCount} / ${trueReqSlots}`, label:'Session Count', cls:sessionViol.length===0?'ok':'fail'},
     {val:slotViol.length===0?'✓':slotViol.length, label:'Slot Violations', cls:slotViol.length===0?'ok':'fail'},
     {val:spacingViol.length===0?'✓':spacingViol.length, label:'Spacing Violations', cls:spacingViol.length===0?'ok':'fail'},
     {val:clone.length===0?'✓':clone.length, label:'Faculty Cloning violation', cls:clone.length===0?'ok':'fail'},
@@ -2669,42 +2691,86 @@ function exportToExcel() {
     XLSX.utils.book_append_sheet(wb, ws, safeSheetName(sem.name));
   });
 
-  // ── TIMETABLE sheet (same pivoted structure as before) ───────
+  // ── TIMETABLE sheet ───────
   if (State.timetable && State.timetable.length) {
-    const tt         = State.timetable;
-    const ttSections = [...new Set(tt.map(r => r.section))].sort();
+    const aoa = [];
 
-    const pivotMap = new Map();
-    tt.forEach(r => {
-      const key = `${r.date}||${r.day}||${r.fromTime}||${r.toTime}`;
-      if (!pivotMap.has(key))
-        pivotMap.set(key, { date: r.date, day: r.day, fromTime: r.fromTime, toTime: r.toTime, cells: {} });
-      const entry = pivotMap.get(key);
-      if (!entry.cells[r.section]) entry.cells[r.section] = [];
-      entry.cells[r.section].push(`${r.courseShort || r.courseCode} (${r.facultyShort || ''})`);
+    State.semesters.forEach(sem => {
+
+      const tt = State.timetable.filter(r => r.semesterId === sem.id);
+      if (!tt.length) return;
+
+      aoa.push(['##SEMESTER##', sem.name, sem.id]);
+
+      const columns = sem.configMode === 'areas'
+        ? [...new Set(tt.map(r => r.areaShortName).filter(Boolean))].sort()
+        : [...new Set(tt.map(r => r.section).filter(Boolean))].sort();
+
+      const pivotMap = new Map();
+
+      tt.forEach(r => {
+
+        const key = `${r.date}||${r.day}||${r.fromTime}||${r.toTime}`;
+
+        if (!pivotMap.has(key)) {
+          pivotMap.set(key, {
+            date: r.date,
+            day: r.day,
+            fromTime: r.fromTime,
+            toTime: r.toTime,
+            cells: {}
+          });
+        }
+
+        const columnKey = sem.configMode === 'areas'
+          ? r.areaShortName
+          : r.section;
+
+        if (!columnKey) return;
+
+        const row = pivotMap.get(key);
+
+        if (!row.cells[columnKey]) row.cells[columnKey] = [];
+
+        row.cells[columnKey].push(
+          `${r.courseShort || r.courseCode} (${r.facultyShort || ''})`
+        );
+      });
+
+      const rows = [...pivotMap.values()].sort(
+        (a,b) =>
+          a.date.localeCompare(b.date) ||
+          a.fromTime.localeCompare(b.fromTime)
+      );
+
+      aoa.push(['Date','Day','From Time','To Time',...columns]);
+
+      rows.forEach(r=>{
+        aoa.push([
+          r.date,
+          r.day,
+          r.fromTime,
+          r.toTime,
+          ...columns.map(c=>r.cells[c] ? r.cells[c].join(' / ') : '')
+        ]);
+      });
+
+      aoa.push([]);
     });
-    const pivotRows = [...pivotMap.values()]
-      .sort((a, b) => a.date.localeCompare(b.date) || a.fromTime.localeCompare(b.fromTime));
-
-    const ttHeader = ['Date', 'Day', 'From Time', 'To Time', ...ttSections];
-    const ttRows   = pivotRows.map(p =>
-      [p.date, p.day, p.fromTime, p.toTime, ...ttSections.map(s => p.cells[s] ? p.cells[s].join(' / ') : '')]
-    );
-
-    const wsTT = XLSX.utils.aoa_to_sheet([ttHeader, ...ttRows]);
-    setColWidths(wsTT, [12, 10, 10, 10, ...ttSections.map(() => 10)]);
-    freezeRow(wsTT);
 
     const meta = State.timetableMeta;
+
     if (meta) {
-      XLSX.utils.sheet_add_aoa(wsTT, [
-        [],
-        ['__META__', 'Status',       meta.status],
-        ['__META__', 'Generated At', meta.timestamp],
-        ['__META__', 'Constraint',   meta.constraintType],
-        ['__META__', 'Penalty',      meta.penalty],
-      ], { origin: { r: ttRows.length + 3, c: 0 } });
+      aoa.push(['__META__','Status',meta.status]);
+      aoa.push(['__META__','Generated At',meta.timestamp]);
+      aoa.push(['__META__','Constraint',meta.constraintType]);
+      aoa.push(['__META__','Penalty',meta.penalty]);
     }
+
+    const wsTT = XLSX.utils.aoa_to_sheet(aoa);
+
+    freezeRow(wsTT);
+
     XLSX.utils.book_append_sheet(wb, wsTT, 'Timetable');
   }
 
@@ -3123,6 +3189,9 @@ function _parseLegacySheets(toObjects, sheetNames) {
     const shortName = String(r['Short Name'] || '').trim();
     if (!fullName || !shortName) return null;
     const slotsStr = String(
+      r['Unavailable Dates (YYYY-MM-DD|HH:MM-HH:MM;...)'] ||
+      r['Unavailable Dates (YYYY-MM-DD)']                  ||
+      r['Unavailable Dates (date|HH:MM-HH:MM;...)']        ||
       r['Unavailable Slots (YYYY-MM-DD|HH:MM-HH:MM;...)'] ||
       r['Unavailable Slots (date|HH:MM-HH:MM;...)']       || ''
     ).trim();
@@ -3203,57 +3272,152 @@ function _parseTimetableSheet(rows, importedSemesters) {
     (sem.faculty || []).forEach(f => { facultyByShort[f.shortName] = f; });
   });
 
-  const header    = rows[0].map(h => String(h || '').trim());
-  const fixedCols = new Set(['Date', 'Day', 'From Time', 'To Time']);
-  const meta      = {};
+  const meta = {};
 
-  rows.slice(1).forEach(row => {
-    const obj = Object.fromEntries(header.map((h, i) => [h, String(row[i] || '').trim()]));
+  let i = 0;
 
-    // Metadata sentinels
-    if (obj['Date'] === '__META__') {
-      const k = obj['Day'], v = obj['From Time'];
-      if (k === 'Status')       meta.status         = v;
-      if (k === 'Generated At') meta.timestamp       = normalizeTimestamp(v) || v;
-      if (k === 'Constraint')   meta.constraintType  = v;
-      if (k === 'Penalty')      meta.penalty         = v;
-      return;
+  while (i < rows.length) {
+
+    const row = rows[i].map(v => String(v || '').trim());
+
+    // ---------- META ----------
+    if (row[0] === '__META__') {
+
+      if (row[1] === 'Status') meta.status = row[2];
+      else if (row[1] === 'Generated At') meta.timestamp = normalizeTimestamp(row[2]) || row[2];
+      else if (row[1] === 'Constraint') meta.constraintType = row[2];
+      else if (row[1] === 'Penalty') meta.penalty = row[2];
+
+      i++;
+      continue;
     }
-    if (!obj['Date']) return;
 
-    const date      = obj['Date'];
-    const day       = obj['Day'];
-    const fromTime  = obj['From Time'];
-    const toTime    = obj['To Time'];
-    const timeLabel = `${fromTime} - ${toTime}`;
+    // ---------- SEMESTER ----------
+    if (row[0] !== '##SEMESTER##') {
+      i++;
+      continue;
+    }
 
-    Object.keys(obj).filter(col => !fixedCols.has(col)).forEach(col => {
-      const cellVal = obj[col]; if (!cellVal) return;
-      const section = col.trim();
+    const semesterName = row[1];
+    const semesterId = row[2];
 
-      cellVal.split(/\s*\/\s*/).map(s => s.trim()).filter(Boolean).forEach(part => {
-        const match      = part.match(/^(.+?)\s*\((.+)\)$/);
-        const rawShort   = match ? match[1].trim() : part;
-        const facShort   = match ? match[2].trim() : '';
-        const course     = courseByShort[rawShort] || courseByCode[rawShort] || null;
-        const courseCode  = course ? course.code       : rawShort;
-        const courseTitle = course ? course.title      : rawShort;
-        const courseShort = course ? course.shortTitle : rawShort;
-        const facObj      = facultyByShort[facShort]  || null;
-        const faculty     = facObj ? facObj.fullName   : facShort;
-        result.timetable.push({
-          date, day, fromTime, toTime, timeLabel,
-          section, courseCode, courseTitle, courseShort,
-          facultyShort: facShort, faculty,
+    const semester = importedSemesters.find(
+      s => s.id === semesterId || s.name === semesterName
+    );
+
+    i++;
+
+    if (i >= rows.length) break;
+
+    const header = rows[i].map(v => String(v || '').trim());
+
+    const fixedCols = new Set([
+      'Date',
+      'Day',
+      'From Time',
+      'To Time'
+    ]);
+
+    i++;
+
+    while (i < rows.length) {
+
+      const r = rows[i];
+
+      if (!r.length || r.every(c => String(c || '').trim() === '')) {
+        i++;
+        break;
+      }
+
+      if (String(r[0]).trim() === '##SEMESTER##') {
+        break;
+      }
+
+      if (String(r[0]).trim() === '__META__') {
+        break;
+      }
+
+      const obj = Object.fromEntries(
+        header.map((h,idx)=>[
+          h,
+          String(r[idx] || '').trim()
+        ])
+      );
+
+      const date = obj['Date'];
+      const day = obj['Day'];
+      const fromTime = obj['From Time'];
+      const toTime = obj['To Time'];
+
+      const timeLabel = `${fromTime} - ${toTime}`;
+
+      Object.keys(obj)
+        .filter(c=>!fixedCols.has(c))
+        .forEach(col=>{
+
+          const cell = obj[col];
+          if (!cell) return;
+
+          cell.split(/\s*\/\s*/)
+            .map(x=>x.trim())
+            .filter(Boolean)
+            .forEach(part=>{
+
+              const m = part.match(/^(.+?)\s*\((.+)\)$/);
+
+              const rawShort = m ? m[1].trim() : part;
+              const facShort = m ? m[2].trim() : '';
+
+              const course =
+                courseByShort[rawShort] ||
+                courseByCode[rawShort];
+
+              result.timetable.push({
+
+                semesterId: semester?.id,
+                semesterName: semester?.name,
+
+                date,
+                day,
+                fromTime,
+                toTime,
+                timeLabel,
+
+                section:
+                  semester?.configMode === 'sections'
+                    ? col
+                    : '',
+
+                areaShortName:
+                  semester?.configMode === 'areas'
+                    ? col
+                    : '',
+
+                courseCode: course ? course.code : rawShort,
+                courseTitle: course ? course.title : rawShort,
+                courseShort: course ? course.shortTitle : rawShort,
+
+                facultyShort: facShort,
+                faculty: facultyByShort[facShort]?.fullName || facShort
+              });
+
+            });
+
         });
-      });
-    });
-  });
+
+      i++;
+    }
+  }
 
   result.meta = Object.keys(meta).length
     ? meta
     : (result.timetable.length
-        ? { status: 'imported', timestamp: utcNowIso(), constraintType: 'imported', penalty: '?' }
+        ? {
+            status:'imported',
+            timestamp:utcNowIso(),
+            constraintType:'imported',
+            penalty:'?'
+          }
         : null);
 
   return result;
